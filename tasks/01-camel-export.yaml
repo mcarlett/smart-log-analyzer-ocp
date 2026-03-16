@@ -1,0 +1,69 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: camel-export
+spec:
+  params:
+    - name: app-path
+      type: string
+      description: Path within the repository to the Camel application to export
+    - name: camel-image
+      type: string
+      default: "quay.io/mcarlett/camel-launcher:4.18.0"
+      description: Image containing the Camel CLI
+    - name: gav
+      type: string
+      default: "com.example:camel-app:1.0.0"
+      description: Maven groupId:artifactId:version for the exported project
+    - name: export-dir
+      type: string
+      default: "export"
+      description: Output directory for the exported Quarkus project
+  workspaces:
+    - name: source
+      description: Workspace containing the cloned repository
+  steps:
+    - name: export
+      image: $(params.camel-image)
+      workingDir: $(workspaces.source.path)/$(params.app-path)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        EXPORT_DIR="$(workspaces.source.path)/$(params.export-dir)"
+
+        echo "Exporting Camel application from $(params.app-path) to Quarkus..."
+        echo "Output directory: ${EXPORT_DIR}"
+        echo "GAV: $(params.gav)"
+
+        camel export \
+          --runtime=quarkus \
+          --gav="$(params.gav)" \
+          --fresh \
+          --dir="${EXPORT_DIR}"
+
+        echo "Export completed. Contents of ${EXPORT_DIR}:"
+        ls -la "${EXPORT_DIR}"
+
+        DOCKERFILE="${EXPORT_DIR}/src/main/docker/Dockerfile.jvm"
+        if [ ! -f "${DOCKERFILE}" ]; then
+          echo "Dockerfile.jvm not found, generating one..."
+          mkdir -p "${EXPORT_DIR}/src/main/docker"
+          cat > "${DOCKERFILE}" <<'EOF'
+        FROM registry.access.redhat.com/ubi9/openjdk-21-runtime:latest
+        ENV LANGUAGE='en_US:en'
+        COPY --chown=185 target/quarkus-app/lib/ /deployments/lib/
+        COPY --chown=185 target/quarkus-app/*.jar /deployments/
+        COPY --chown=185 target/quarkus-app/app/ /deployments/app/
+        COPY --chown=185 target/quarkus-app/quarkus/ /deployments/quarkus/
+        EXPOSE 8080
+        USER 185
+        ENV JAVA_OPTS_APPEND="-Dquarkus.http.host=0.0.0.0 -Djava.util.logging.manager=org.jboss.logmanager.LogManager"
+        ENV JAVA_APP_JAR="/deployments/quarkus-run.jar"
+        ENTRYPOINT [ "/opt/jboss/container/java/run/run-java.sh" ]
+        EOF
+        else
+          echo "Dockerfile.jvm already exists, skipping generation."
+        fi
+
+        chmod -R 777 "${EXPORT_DIR}"

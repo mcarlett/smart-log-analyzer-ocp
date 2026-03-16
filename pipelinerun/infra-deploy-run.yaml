@@ -1,0 +1,19 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: infra-deploy-run-
+spec:
+  pipelineRef:
+    name: infra-deploy
+  params:
+    - name: namespace
+      value: slog-analyzer
+  workspaces:
+    - name: shared-workspace
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 100Mi

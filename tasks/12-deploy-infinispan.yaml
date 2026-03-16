@@ -1,0 +1,89 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: deploy-infinispan
+spec:
+  params:
+    - name: name
+      type: string
+      default: infinispan
+      description: Name of the Infinispan cluster
+    - name: namespace
+      type: string
+      description: Target namespace
+    - name: resources-path
+      type: string
+      default: resources/infinispan
+      description: Path within the workspace to the Infinispan resource files
+  workspaces:
+    - name: source
+      description: Workspace containing the resource files
+  steps:
+    - name: deploy
+      image: quay.io/openshift/origin-cli:latest
+      env:
+        - name: DG_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: infra-accounts
+              key: datagrid-username
+        - name: DG_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: infra-accounts
+              key: datagrid-password
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        NAME="$(params.name)"
+        NS="$(params.namespace)"
+        RESOURCES="$(workspaces.source.path)/$(params.resources-path)"
+
+        echo "Creating credentials secret for Infinispan..."
+        oc create secret generic "${NAME}-credentials" \
+          -n "${NS}" \
+          --from-literal=identities.yaml="
+        credentials:
+          - username: ${DG_USERNAME}
+            password: ${DG_PASSWORD}
+            roles:
+              - admin" \
+          --dry-run=client -o yaml | oc apply -n "${NS}" -f -
+
+        echo "Deploying Infinispan cluster ${NAME} in namespace ${NS}..."
+        oc apply -n "${NS}" -f "${RESOURCES}/infinispan.yaml"
+
+        echo "Waiting for Infinispan cluster ${NAME} to be ready..."
+        for i in $(seq 1 90); do
+          CONDITION=$(oc get infinispan "${NAME}" -n "${NS}" -o jsonpath='{.status.conditions[?(@.type=="WellFormed")].status}' 2>/dev/null || true)
+          if [ "${CONDITION}" = "True" ]; then
+            echo "Infinispan cluster ${NAME} is ready."
+            break
+          fi
+          echo "  Waiting... (${i}/90)"
+          sleep 5
+        done
+
+        if [ "${CONDITION}" != "True" ]; then
+          echo "ERROR: Infinispan cluster ${NAME} did not become ready in time."
+          exit 1
+        fi
+
+        INFINISPAN_URL="https://localhost:11222"
+        CACHES_DIR="${RESOURCES}/caches"
+
+        echo "Creating caches from ${CACHES_DIR}..."
+        for CACHE_FILE in "${CACHES_DIR}"/*.json; do
+          CACHE_NAME=$(basename "${CACHE_FILE}" .json)
+          echo "  Creating cache '${CACHE_NAME}'..."
+          oc exec -n "${NS}" "${NAME}-0" -- curl -f -s -k \
+            -u "${DG_USERNAME}:${DG_PASSWORD}" --digest \
+            -X POST "${INFINISPAN_URL}/rest/v2/caches/${CACHE_NAME}" \
+            -H 'Content-Type: application/json' \
+            -d "$(cat "${CACHE_FILE}")"
+          echo ""
+          echo "  Cache '${CACHE_NAME}' created."
+        done
+
+        echo "All caches created successfully."

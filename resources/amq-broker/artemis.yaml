@@ -1,0 +1,17 @@
+apiVersion: broker.amq.io/v1beta1
+kind: ActiveMQArtemis
+metadata:
+  name: artemis
+spec:
+  deploymentPlan:
+    size: 1
+    image: placeholder
+    requireLogin: true
+    persistenceEnabled: false
+  acceptors:
+    - name: amqp
+      protocols: amqp
+      port: 5672
+      expose: false
+  console:
+    expose: true

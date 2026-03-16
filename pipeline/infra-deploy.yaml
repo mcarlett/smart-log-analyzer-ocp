@@ -1,0 +1,140 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: infra-deploy
+spec:
+  params:
+    - name: namespace
+      type: string
+      description: Target namespace for operator installation
+      default: slog-analyzer
+    - name: repo-url
+      type: string
+      description: Git repository URL containing the resource files
+      default: "https://github.com/mcarlett/smart-log-analyzer-ocp.git"
+    - name: repo-revision
+      type: string
+      description: Git revision (branch, tag, or commit SHA)
+      default: main
+
+  workspaces:
+    - name: shared-workspace
+      description: Workspace for cloned resource files
+
+  tasks:
+    - name: init-workspace
+      taskRef:
+        name: init-workspace
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    - name: git-clone
+      runAfter:
+        - init-workspace
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-clone
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: URL
+          value: $(params.repo-url)
+        - name: REVISION
+          value: $(params.repo-revision)
+        - name: DELETE_EXISTING
+          value: "true"
+        - name: SUBDIRECTORY
+          value: repo
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+
+    - name: create-operator-group
+      runAfter:
+        - git-clone
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: openshift-client
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: SCRIPT
+          value: |
+            NS="$(params.namespace)"
+
+            echo "Ensuring OperatorGroup exists in namespace ${NS}..."
+            cat <<EOF | oc apply -f -
+            apiVersion: operators.coreos.com/v1
+            kind: OperatorGroup
+            metadata:
+              name: ${NS}-operator-group
+              namespace: ${NS}
+            spec:
+              targetNamespaces:
+                - ${NS}
+            EOF
+
+            echo "OperatorGroup ready."
+
+    - name: install-datagrid
+      runAfter:
+        - create-operator-group
+      taskRef:
+        name: install-operator
+      params:
+        - name: name
+          value: datagrid
+        - name: channel
+          value: stable
+        - name: namespace
+          value: $(params.namespace)
+
+    - name: install-amq-broker
+      runAfter:
+        - create-operator-group
+      taskRef:
+        name: install-operator
+      params:
+        - name: name
+          value: amq-broker-rhel9
+        - name: channel
+          value: 7.13.x
+        - name: namespace
+          value: $(params.namespace)
+
+    - name: deploy-infinispan
+      runAfter:
+        - install-datagrid
+      taskRef:
+        name: deploy-infinispan
+      params:
+        - name: namespace
+          value: $(params.namespace)
+        - name: resources-path
+          value: repo/resources/infinispan
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    - name: deploy-amq-broker
+      runAfter:
+        - install-amq-broker
+      taskRef:
+        name: deploy-amq-broker
+      params:
+        - name: namespace
+          value: $(params.namespace)
+        - name: resources-path
+          value: repo/resources/amq-broker
+      workspaces:
+        - name: source
+          workspace: shared-workspace

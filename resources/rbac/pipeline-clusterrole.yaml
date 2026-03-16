@@ -1,0 +1,62 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: slog-analyzer-pipeline
+rules:
+  # OLM resources (operator installation)
+  - apiGroups: ["operators.coreos.com"]
+    resources:
+      - operatorgroups
+      - subscriptions
+      - clusterserviceversions
+      - installplans
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # Deployments (application deployment)
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # Core resources (services, pods, configmaps)
+  - apiGroups: [""]
+    resources:
+      - pods
+      - services
+      - configmaps
+      - secrets
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # OpenShift image streams (for buildah push to internal registry)
+  - apiGroups: ["image.openshift.io"]
+    resources:
+      - imagestreams
+      - imagestreamtags
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # OpenShift routes (for exposing services)
+  - apiGroups: ["route.openshift.io"]
+    resources:
+      - routes
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # AMQ Broker (ActiveMQArtemis CRs)
+  - apiGroups: ["broker.amq.io"]
+    resources:
+      - activemqartemises
+      - activemqartemisaddresses
+      - activemqartemisscaledowns
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # Infinispan / Data Grid (Infinispan CRs and caches)
+  - apiGroups: ["infinispan.org"]
+    resources:
+      - infinispans
+      - caches
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # Pods exec (for creating Infinispan caches via CLI)
+  - apiGroups: [""]
+    resources:
+      - pods/exec
+    verbs: ["create"]

@@ -1,0 +1,182 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build-and-deploy
+spec:
+  params:
+    - name: repo-url
+      type: string
+      description: Git repository URL
+      default: "https://github.com/apache/camel-jbang-examples.git"
+    - name: repo-revision
+      type: string
+      description: Git revision (branch, tag, or commit SHA)
+      default: main
+    - name: app-path
+      type: string
+      description: Path within the repository to the Camel application
+      default: smart-log-analyzer/correlator
+    - name: app-name
+      type: string
+      description: Application name (used for image and deployment)
+      default: correlator
+    - name: namespace
+      type: string
+      description: Target namespace for deployment
+      default: slog-analyzer
+    - name: camel-image
+      type: string
+      description: Image containing the Camel CLI for export
+      default: "quay.io/mcarlett/camel-launcher:4.18.0"
+    - name: gav
+      type: string
+      description: Maven groupId:artifactId:version for the exported project
+      default: "com.example:correlator:1.0.0"
+
+  workspaces:
+    - name: shared-workspace
+      description: Shared workspace for source code and build artifacts
+
+  tasks:
+    # Step 0: Initialize workspace permissions
+    - name: init-workspace
+      taskRef:
+        name: init-workspace
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    # Step 1: Clone the repository
+    - name: git-clone
+      runAfter:
+        - init-workspace
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-clone
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: URL
+          value: $(params.repo-url)
+        - name: REVISION
+          value: $(params.repo-revision)
+        - name: DELETE_EXISTING
+          value: "true"
+        - name: SUBDIRECTORY
+          value: repo
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+
+    # Step 2: Fix workspace permissions after git-clone
+    - name: fix-workspace
+      runAfter:
+        - git-clone
+      taskRef:
+        name: init-workspace
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    # Step 3: Export Camel application to Quarkus project
+    - name: camel-export
+      runAfter:
+        - fix-workspace
+      taskRef:
+        name: camel-export
+      params:
+        - name: app-path
+          value: repo/$(params.app-path)
+        - name: camel-image
+          value: $(params.camel-image)
+        - name: gav
+          value: $(params.gav)
+        - name: export-dir
+          value: export
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    # Step 3: Build Quarkus application with Maven
+    - name: maven-build
+      runAfter:
+        - camel-export
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: maven
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: GOALS
+          value:
+            - clean
+            - package
+        - name: SUBDIRECTORY
+          value: export
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    # Step 4: Build container image with Buildah
+    - name: build-image
+      runAfter:
+        - maven-build
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: buildah
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: IMAGE
+          value: image-registry.openshift-image-registry.svc:5000/$(params.namespace)/$(params.app-name):latest
+        - name: DOCKERFILE
+          value: src/main/docker/Dockerfile.jvm
+        - name: CONTEXT
+          value: .
+        - name: TLS_VERIFY
+          value: "false"
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+          subPath: export
+
+    # Step 5: Deploy the application
+    - name: deploy
+      runAfter:
+        - build-image
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: openshift-client
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: SCRIPT
+          value: |
+            APP="$(params.app-name)"
+            NS="$(params.namespace)"
+            IMAGE="image-registry.openshift-image-registry.svc:5000/${NS}/${APP}:latest"
+
+            echo "Deploying ${APP} to namespace ${NS}..."
+            oc create deployment "${APP}" \
+              --image="${IMAGE}" \
+              -n "${NS}" \
+              --dry-run=client -o yaml | oc apply -n "${NS}" -f -
+
+            oc rollout status deployment/"${APP}" -n "${NS}" --timeout=300s
+            echo "Deployment ${APP} is ready."
