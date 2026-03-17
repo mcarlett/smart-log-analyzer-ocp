@@ -273,6 +273,18 @@ spec:
             oc set env deployment/"${APP}" -n "${NS}" \
               --from=secret/vault-token
 
+            # Workaround for Infinispan client 16.x Netty event loop incompatibility
+            # (incompatible event loop type: NioEventLoop) with Quarkus 3.32.x
+            oc set env deployment/"${APP}" -n "${NS}" \
+              JAVA_OPTS_APPEND="-Dio.netty.transport.noNative=true"
+
+            # Inject Data Grid credentials for the Quarkus Infinispan client extension,
+            # which cannot resolve Camel vault placeholders (hashicorp:secret:*)
+            oc patch deployment "${APP}" -n "${NS}" --type=json -p '[
+              {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"DATAGRID_USERNAME","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"datagrid-username"}}}},
+              {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"DATAGRID_PASSWORD","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"datagrid-password"}}}}
+            ]'
+
             # Mount app-config ConfigMap as /deployments/config/application.properties
             oc set volume deployment/"${APP}" -n "${NS}" \
               --add --overwrite \
@@ -281,5 +293,6 @@ spec:
               --configmap-name="${APP}-config" \
               --mount-path=/deployments/config
 
+            oc rollout status deployment/"${APP}" -n "${NS}" --timeout=300s
             oc wait --for=condition=Available deployment/"${APP}" -n "${NS}" --timeout=300s
             echo "Deployment ${APP} is ready."
