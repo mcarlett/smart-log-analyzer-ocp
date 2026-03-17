@@ -32,6 +32,14 @@ spec:
       type: string
       description: Maven groupId:artifactId:version for the exported project
       default: "com.example:correlator:1.0.0"
+    - name: config-repo-url
+      type: string
+      description: Git repository URL containing app-config
+      default: "https://github.com/mcarlett/smart-log-analyzer-ocp.git"
+    - name: config-repo-revision
+      type: string
+      description: Git revision for the config repository
+      default: main
 
   workspaces:
     - name: shared-workspace
@@ -72,10 +80,37 @@ spec:
         - name: output
           workspace: shared-workspace
 
+    # Step 1b: Clone the config repository (parallel with git-clone)
+    - name: git-clone-config
+      runAfter:
+        - init-workspace
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-clone
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: URL
+          value: $(params.config-repo-url)
+        - name: REVISION
+          value: $(params.config-repo-revision)
+        - name: DELETE_EXISTING
+          value: "true"
+        - name: SUBDIRECTORY
+          value: config
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+
     # Step 2: Fix workspace permissions after git-clone
     - name: fix-workspace
       runAfter:
         - git-clone
+        - git-clone-config
       taskRef:
         name: init-workspace
       workspaces:
@@ -97,11 +132,13 @@ spec:
           value: $(params.gav)
         - name: export-dir
           value: export
+        - name: app-config-path
+          value: config/resources/app-config
       workspaces:
         - name: source
           workspace: shared-workspace
 
-    # Step 3: Build Quarkus application with Maven
+    # Step 4: Build Quarkus application with Maven
     - name: maven-build
       runAfter:
         - camel-export
@@ -190,6 +227,14 @@ spec:
               --image="${IMAGE}" \
               -n "${NS}" \
               --dry-run=client -o yaml | oc apply -n "${NS}" -f -
+
+            oc set env deployment/"${APP}" -n "${NS}" \
+              --from=configmap/infra-endpoints \
+              --keys=ARTEMIS_BROKER_URL,INFINISPAN_HOSTS,HASHICORP_HOST,HASHICORP_PORT
+
+            oc set env deployment/"${APP}" -n "${NS}" \
+              --from=secret/vault-token \
+              --keys=HASHICORP_TOKEN
 
             oc rollout status deployment/"${APP}" -n "${NS}" --timeout=300s
             echo "Deployment ${APP} is ready."

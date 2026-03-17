@@ -69,3 +69,10 @@ spec:
           ttl=24h"
 
         echo "Vault Kubernetes auth configured."
+
+        echo "Creating vault-token secret..."
+        oc create secret generic vault-token \
+          -n "${NS}" \
+          --from-literal=HASHICORP_TOKEN="${ROOT_TOKEN}" \
+          --dry-run=client -o yaml | oc apply -n "${NS}" -f -
+        echo "Secret vault-token created."

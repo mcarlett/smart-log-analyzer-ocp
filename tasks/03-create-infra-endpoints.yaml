@@ -26,10 +26,6 @@ spec:
         AMQ="$(params.amq-name)"
         ISPN="$(params.infinispan-name)"
 
-        AMQ_AMQP_HOST="${AMQ}-amqp-0-svc.${NS}.svc"
-        AMQ_AMQP_PORT="5672"
-        AMQ_CONSOLE_HOST="${AMQ}-wconsj-0-svc.${NS}.svc"
-        AMQ_CONSOLE_PORT="8161"
         ISPN_HOST="${ISPN}.${NS}.svc"
         ISPN_PORT="11222"
         VAULT_HOST="vault.${NS}.svc"
@@ -39,16 +35,10 @@ spec:
 
         oc create configmap infra-endpoints \
           -n "${NS}" \
-          --from-literal=amq.host="${AMQ_AMQP_HOST}" \
-          --from-literal=amq.port="${AMQ_AMQP_PORT}" \
-          --from-literal=amq.url="amqp://${AMQ_AMQP_HOST}:${AMQ_AMQP_PORT}" \
-          --from-literal=amq.console.url="https://${AMQ_CONSOLE_HOST}:${AMQ_CONSOLE_PORT}" \
-          --from-literal=infinispan.host="${ISPN_HOST}" \
-          --from-literal=infinispan.port="${ISPN_PORT}" \
-          --from-literal=infinispan.url="https://${ISPN_HOST}:${ISPN_PORT}" \
-          --from-literal=vault.host="${VAULT_HOST}" \
-          --from-literal=vault.port="${VAULT_PORT}" \
-          --from-literal=vault.url="http://${VAULT_HOST}:${VAULT_PORT}" \
+          --from-literal=ARTEMIS_BROKER_URL="tcp://${AMQ}-0-svc.${NS}.svc:61616" \
+          --from-literal=INFINISPAN_HOSTS="${ISPN_HOST}:${ISPN_PORT}" \
+          --from-literal=HASHICORP_HOST="${VAULT_HOST}" \
+          --from-literal=HASHICORP_PORT="${VAULT_PORT}" \
           --dry-run=client -o yaml | oc apply -n "${NS}" -f -
 
         echo "ConfigMap infra-endpoints created:"

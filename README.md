@@ -36,6 +36,15 @@ smart-log-analyzer-ocp/
     ├── rbac/
     │   ├── pipeline-clusterrole.yaml        # Scoped ClusterRole for the pipeline SA
     │   └── pipeline-clusterrolebinding.yaml  # Binds the ClusterRole to the pipeline SA
+    ├── app-config/
+    │   ├── correlator/
+    │   │   └── application-prod.properties  # Production config (Vault refs for credentials)
+    │   ├── analyzer/
+    │   │   └── application-prod.properties  # Production config (Vault refs for credentials)
+    │   ├── ui-console/
+    │   │   └── application-prod.properties  # Production config (Vault refs for credentials)
+    │   └── log-generator/
+    │       └── application-prod.properties  # Production config (OpenTelemetry)
     ├── vault/
     │   └── sa-hashicorp-vault.yaml          # ServiceAccount for application access to Vault
     ├── configmaps/
@@ -162,25 +171,20 @@ The `infra-endpoints` ConfigMap is created automatically by the `infra-deploy` p
 
 | Key | Example value | Description |
 |---|---|---|
-| `amq.host` | `artemis-amqp-0-svc.slog-analyzer.svc` | AMQ Broker AMQP service host |
-| `amq.port` | `5672` | AMQ Broker AMQP port |
-| `amq.url` | `amqp://artemis-amqp-0-svc.slog-analyzer.svc:5672` | AMQ Broker AMQP connection URL |
-| `amq.console.url` | `https://artemis-wconsj-0-svc.slog-analyzer.svc:8161` | AMQ Broker web console URL |
-| `infinispan.host` | `infinispan.slog-analyzer.svc` | Infinispan service host |
-| `infinispan.port` | `11222` | Infinispan service port |
-| `infinispan.url` | `https://infinispan.slog-analyzer.svc:11222` | Infinispan connection URL |
-| `vault.host` | `vault.slog-analyzer.svc` | Vault service host |
-| `vault.port` | `8200` | Vault service port |
-| `vault.url` | `http://vault.slog-analyzer.svc:8200` | Vault connection URL |
+| `ARTEMIS_BROKER_URL` | `tcp://artemis-0-svc.slog-analyzer.svc:61616` | AMQ Broker core protocol URL (for JMS/ActiveMQ clients) |
+| `INFINISPAN_HOSTS` | `infinispan.slog-analyzer.svc:11222` | Infinispan host:port (for Camel Infinispan component) |
+| `HASHICORP_HOST` | `vault.slog-analyzer.svc` | Vault host (for Camel HashiCorp Vault component) |
+| `HASHICORP_PORT` | `8200` | Vault port (for Camel HashiCorp Vault component) |
 
 ### Vault
 
-The `deploy-vault` task automatically:
+The Vault deployment tasks (`generate-vault-token`, `install-vault`, `configure-vault`) automatically:
 1. Generates a random root token (UUID-based)
 2. Installs Vault via the [HashiCorp Helm chart](https://github.com/hashicorp/vault-helm) in dev mode (`server.dev.enabled=true`) with the generated token
 3. Dev mode enables a KV v2 secrets engine at `secret/`
 4. Writes all keys from the `infra-accounts` secret into Vault (e.g. `secret/amq-username`, `secret/datagrid-password`)
 5. Creates a `sa-hashicorp-vault` ServiceAccount and configures Vault Kubernetes auth (enables auth method, creates a read-only policy on `secret/data/*`, and binds the role to the service account)
+6. Creates a `vault-token` Secret containing the `HASHICORP_TOKEN` for application use
 
 ### Infrastructure credentials
 

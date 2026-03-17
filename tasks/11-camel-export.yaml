@@ -19,6 +19,10 @@ spec:
       type: string
       default: "export"
       description: Output directory for the exported Quarkus project
+    - name: app-config-path
+      type: string
+      default: ""
+      description: Path within the workspace to the app-config directory (e.g. repo/resources/app-config)
   workspaces:
     - name: source
       description: Workspace containing the cloned repository
@@ -32,6 +36,22 @@ spec:
 
         EXPORT_DIR="$(workspaces.source.path)/$(params.export-dir)"
 
+        APP_NAME=$(basename "$(params.app-path)")
+        APP_CONFIG_PATH="$(params.app-config-path)"
+        APP_DIR="$(workspaces.source.path)/$(params.app-path)"
+        PROFILE_OPT=""
+
+        if [ -n "${APP_CONFIG_PATH}" ]; then
+          PROD_PROPS="$(workspaces.source.path)/${APP_CONFIG_PATH}/${APP_NAME}/application-prod.properties"
+          if [ -f "${PROD_PROPS}" ]; then
+            echo "Copying production config to app folder..."
+            cp "${PROD_PROPS}" "${APP_DIR}/application-prod.properties"
+            PROFILE_OPT="--profile=prod"
+          else
+            echo "No production config found at ${PROD_PROPS}, skipping."
+          fi
+        fi
+
         echo "Exporting Camel application from $(params.app-path) to Quarkus..."
         echo "Output directory: ${EXPORT_DIR}"
         echo "GAV: $(params.gav)"
@@ -40,21 +60,10 @@ spec:
           --runtime=quarkus \
           --gav="$(params.gav)" \
           --fresh \
-          --dir="${EXPORT_DIR}"
+          --dir="${EXPORT_DIR}" \
+          ${PROFILE_OPT}
 
         echo "Export completed. Contents of ${EXPORT_DIR}:"
         ls -la "${EXPORT_DIR}"
-
-        APP_PROPS="${EXPORT_DIR}/src/main/resources/application.properties"
-        SRC_DIR="$(workspaces.source.path)/$(params.app-path)"
-
-        for PROPS_FILE in application.properties application-dev.properties; do
-          if [ -f "${SRC_DIR}/${PROPS_FILE}" ]; then
-            echo "Found ${PROPS_FILE} in source, appending to exported application.properties..."
-            echo "" >> "${APP_PROPS}"
-            echo "# From ${PROPS_FILE}" >> "${APP_PROPS}"
-            cat "${SRC_DIR}/${PROPS_FILE}" >> "${APP_PROPS}"
-          fi
-        done
 
         chmod -R 777 "${EXPORT_DIR}"
