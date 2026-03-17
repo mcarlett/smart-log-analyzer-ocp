@@ -16,6 +16,14 @@ spec:
       type: string
       description: Git revision (branch, tag, or commit SHA)
       default: main
+    - name: amq-name
+      type: string
+      description: Name of the ActiveMQArtemis instance
+      default: artemis
+    - name: infinispan-name
+      type: string
+      description: Name of the Infinispan cluster
+      default: infinispan
 
   workspaces:
     - name: shared-workspace
@@ -117,6 +125,8 @@ spec:
       taskRef:
         name: deploy-infinispan
       params:
+        - name: name
+          value: $(params.infinispan-name)
         - name: namespace
           value: $(params.namespace)
         - name: resources-path
@@ -131,6 +141,8 @@ spec:
       taskRef:
         name: deploy-amq-broker
       params:
+        - name: name
+          value: $(params.amq-name)
         - name: namespace
           value: $(params.namespace)
         - name: resources-path
@@ -138,3 +150,64 @@ spec:
       workspaces:
         - name: source
           workspace: shared-workspace
+
+    - name: generate-vault-token
+      runAfter:
+        - git-clone
+      taskRef:
+        name: generate-vault-token
+
+    - name: install-vault
+      runAfter:
+        - generate-vault-token
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: helm-upgrade-from-repo
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: helm_repo
+          value: https://helm.releases.hashicorp.com
+        - name: chart_name
+          value: hashicorp/vault
+        - name: release_name
+          value: vault
+        - name: release_namespace
+          value: $(params.namespace)
+        - name: overwrite_values
+          value: "global.openshift=true,server.dev.enabled=true,server.dev.devRootToken=$(tasks.generate-vault-token.results.token),server.image.repository=docker.io/hashicorp/vault,injector.image.repository=docker.io/hashicorp/vault-k8s"
+
+    - name: configure-vault
+      runAfter:
+        - install-vault
+      taskRef:
+        name: configure-vault
+      params:
+        - name: namespace
+          value: $(params.namespace)
+        - name: vault-token
+          value: $(tasks.generate-vault-token.results.token)
+        - name: resources-path
+          value: repo/resources/vault
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    - name: create-infra-endpoints
+      runAfter:
+        - deploy-infinispan
+        - deploy-amq-broker
+        - configure-vault
+      taskRef:
+        name: create-infra-endpoints
+      params:
+        - name: amq-name
+          value: $(params.amq-name)
+        - name: infinispan-name
+          value: $(params.infinispan-name)
+        - name: namespace
+          value: $(params.namespace)

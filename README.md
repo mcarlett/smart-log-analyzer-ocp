@@ -1,21 +1,25 @@
 # Smart Log Analyzer OCP
 
-Tekton pipelines for deploying infrastructure and building Apache Camel JBang applications on OpenShift. The `infra-deploy` pipeline installs the required operators and deploys AMQ Broker and Infinispan (Data Grid) with pre-configured caches. The `build-and-deploy` pipeline exports a Camel application to a Quarkus project, builds it with Maven, creates a container image with Buildah, and deploys it.
+Tekton pipelines for deploying infrastructure and building Apache Camel JBang applications on OpenShift. The `infra-deploy` pipeline installs the required operators and deploys AMQ Broker, Infinispan (Data Grid) with pre-configured caches, and HashiCorp Vault for secrets management. The `build-and-deploy` pipeline exports a Camel application to a Quarkus project, builds it with Maven, creates a container image with Buildah, and deploys it.
 
 ## Project Structure
 
 ```
 smart-log-analyzer-ocp/
 ├── tasks/
-│   ├── 00-init-workspace.yaml     # Fixes PVC permissions for workspace
-│   ├── 01-camel-export.yaml       # Runs camel export to Quarkus, generates Dockerfile if missing
-│   ├── 10-install-operator.yaml   # Reusable task to install any OLM operator
-│   ├── 11-deploy-amq-broker.yaml  # Deploys an ActiveMQArtemis instance
-│   └── 12-deploy-infinispan.yaml  # Deploys an Infinispan cluster with caches
+│   ├── 00-install-operator.yaml        # Reusable task to install any OLM operator
+│   ├── 01-deploy-amq-broker.yaml      # Deploys an ActiveMQArtemis instance
+│   ├── 02-deploy-infinispan.yaml      # Deploys an Infinispan cluster with caches
+│   ├── 03-create-infra-endpoints.yaml # Creates infra-endpoints ConfigMap with service URLs
+│   ├── 04-generate-vault-token.yaml  # Generates a random Vault root token
+│   ├── 05-configure-vault.yaml      # Waits for Vault pod and stores infra-accounts secrets
+│   ├── 10-init-workspace.yaml         # Fixes PVC permissions for workspace
+│   ├── 11-camel-export.yaml           # Runs camel export to Quarkus
+│   └── 12-prepare-dockerfile.yaml     # Writes Dockerfile from base-image-config ConfigMap to workspace
 │
 ├── pipeline/
 │   ├── build-and-deploy.yaml      # Pipeline orchestrating build tasks
-│   └── infra-deploy.yaml          # Pipeline to install operators and deploy AMQ Broker + Infinispan
+│   └── infra-deploy.yaml          # Pipeline to install operators and deploy AMQ Broker, Infinispan + Vault
 │
 ├── pipelinerun/
 │   ├── build-and-deploy-run.yaml  # Example PipelineRun for the correlator component
@@ -32,6 +36,10 @@ smart-log-analyzer-ocp/
     ├── rbac/
     │   ├── pipeline-clusterrole.yaml        # Scoped ClusterRole for the pipeline SA
     │   └── pipeline-clusterrolebinding.yaml  # Binds the ClusterRole to the pipeline SA
+    ├── vault/
+    │   └── sa-hashicorp-vault.yaml          # ServiceAccount for application access to Vault
+    ├── configmaps/
+    │   └── base-image-config.yaml           # Dockerfile for building the application image
     └── secrets/
         └── infra-accounts.yaml              # Infrastructure credentials (AMQ Broker, Data Grid)
 ```
@@ -41,8 +49,9 @@ smart-log-analyzer-ocp/
 ### infra-deploy
 
 ```
-init-workspace → git-clone → create-operator-group → install-datagrid    → deploy-infinispan
-                                                    → install-amq-broker → deploy-amq-broker
+                              → generate-vault-token → install-vault → configure-vault         ↘
+init-workspace → git-clone → create-operator-group → install-datagrid    → deploy-infinispan  → create-infra-endpoints
+                                                    → install-amq-broker → deploy-amq-broker  ↗
 ```
 
 | Task | Source | Description |
@@ -53,11 +62,15 @@ init-workspace → git-clone → create-operator-group → install-datagrid    �
 | **install-operator** | Custom | Installs an OLM operator via Subscription, waits for CSV to succeed |
 | **deploy-amq-broker** | Custom | Applies `resources/amq-broker/artemis.yaml`, waits for pod ready |
 | **deploy-infinispan** | Custom | Applies `resources/infinispan/infinispan.yaml`, creates caches from `resources/infinispan/caches/*.json` |
+| **generate-vault-token** | Custom | Generates a random UUID-based root token for Vault |
+| **install-vault** | `openshift-pipelines` | Installs the Vault Helm chart from repo using `helm-upgrade-from-repo` (dev mode, random root token) |
+| **configure-vault** | Custom | Waits for Vault pod to be ready, writes all `infra-accounts` secrets to `secret/<key>`, creates `sa-hashicorp-vault` service account with Kubernetes auth |
+| **create-infra-endpoints** | Custom | Creates `infra-endpoints` ConfigMap with AMQ Broker, Infinispan, and Vault service URLs |
 
 ### build-and-deploy
 
 ```
-init-workspace → git-clone → fix-workspace → camel-export → maven (package) → buildah (build image) → deploy
+init-workspace → git-clone → fix-workspace → camel-export → maven (package) → prepare-dockerfile → buildah (build image) → deploy
 ```
 
 | Task | Source | Description |
@@ -67,6 +80,7 @@ init-workspace → git-clone → fix-workspace → camel-export → maven (packa
 | **fix-workspace** | Custom | Fixes permissions after git-clone for subsequent tasks |
 | **camel-export** | Custom | Runs `camel export --runtime=quarkus` to produce a Maven project |
 | **maven** | `openshift-pipelines` | Runs `./mvnw clean package` to build the Quarkus application |
+| **prepare-dockerfile** | Custom | Writes Dockerfile from `base-image-config` ConfigMap to workspace |
 | **buildah** | `openshift-pipelines` | Builds the container image from `src/main/docker/Dockerfile.jvm` |
 | **openshift-client** | `openshift-pipelines` | Creates or updates the Deployment |
 
@@ -84,13 +98,14 @@ init-workspace → git-clone → fix-workspace → camel-export → maven (packa
 # Create the target namespace
 oc new-project slog-analyzer
 
-# Apply RBAC, secrets, tasks, and pipelines
+# Apply RBAC, secrets, configmaps, tasks, and pipelines
 oc apply -f resources/rbac/
 oc apply -f resources/secrets/
+oc apply -f resources/configmaps/
 oc apply -f tasks/
 oc apply -f pipeline/
 
-# Install operators and deploy AMQ Broker + Infinispan
+# Install operators and deploy AMQ Broker, Infinispan + Vault
 oc create -f pipelinerun/infra-deploy-run.yaml
 
 # Wait for infra-deploy to complete, then build and deploy the application
@@ -141,6 +156,32 @@ tkn pipeline start build-and-deploy \
 | `repo-url` | `https://github.com/mcarlett/smart-log-analyzer-ocp.git` | Git repository URL containing resource files |
 | `repo-revision` | `main` | Git revision (branch, tag, or commit SHA) |
 
+### Infrastructure endpoints
+
+The `infra-endpoints` ConfigMap is created automatically by the `infra-deploy` pipeline and contains:
+
+| Key | Example value | Description |
+|---|---|---|
+| `amq.host` | `artemis-amqp-0-svc.slog-analyzer.svc` | AMQ Broker AMQP service host |
+| `amq.port` | `5672` | AMQ Broker AMQP port |
+| `amq.url` | `amqp://artemis-amqp-0-svc.slog-analyzer.svc:5672` | AMQ Broker AMQP connection URL |
+| `amq.console.url` | `https://artemis-wconsj-0-svc.slog-analyzer.svc:8161` | AMQ Broker web console URL |
+| `infinispan.host` | `infinispan.slog-analyzer.svc` | Infinispan service host |
+| `infinispan.port` | `11222` | Infinispan service port |
+| `infinispan.url` | `https://infinispan.slog-analyzer.svc:11222` | Infinispan connection URL |
+| `vault.host` | `vault.slog-analyzer.svc` | Vault service host |
+| `vault.port` | `8200` | Vault service port |
+| `vault.url` | `http://vault.slog-analyzer.svc:8200` | Vault connection URL |
+
+### Vault
+
+The `deploy-vault` task automatically:
+1. Generates a random root token (UUID-based)
+2. Installs Vault via the [HashiCorp Helm chart](https://github.com/hashicorp/vault-helm) in dev mode (`server.dev.enabled=true`) with the generated token
+3. Dev mode enables a KV v2 secrets engine at `secret/`
+4. Writes all keys from the `infra-accounts` secret into Vault (e.g. `secret/amq-username`, `secret/datagrid-password`)
+5. Creates a `sa-hashicorp-vault` ServiceAccount and configures Vault Kubernetes auth (enables auth method, creates a read-only policy on `secret/data/*`, and binds the role to the service account)
+
 ### Infrastructure credentials
 
 The `infra-accounts` secret is defined in `resources/secrets/infra-accounts.yaml` and contains the following keys:
@@ -158,6 +199,17 @@ The `infra-accounts` secret is defined in `resources/secrets/infra-accounts.yaml
 # Delete the Infinispan and AMQ Broker CRs first (allows operators to clean up)
 oc delete infinispan infinispan -n slog-analyzer
 oc delete activemqartemis artemis -n slog-analyzer
+
+# Uninstall Vault Helm release
+helm uninstall vault -n slog-analyzer
+
+# Delete all task runs and tasks
+oc delete taskrun --all -n slog-analyzer
+oc delete task --all -n slog-analyzer
+
+# Delete all pipeline runs and pipelines
+oc delete pipelinerun --all -n slog-analyzer
+oc delete pipeline --all -n slog-analyzer
 
 # Delete the namespace and all remaining resources
 oc delete project slog-analyzer

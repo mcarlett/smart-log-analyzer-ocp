@@ -125,10 +125,23 @@ spec:
         - name: source
           workspace: shared-workspace
 
-    # Step 4: Build container image with Buildah
-    - name: build-image
+    # Step 4: Write Dockerfile from ConfigMap to workspace
+    - name: prepare-dockerfile
       runAfter:
         - maven-build
+      taskRef:
+        name: prepare-dockerfile
+      params:
+        - name: export-dir
+          value: export
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    # Step 5: Build container image with Buildah
+    - name: build-image
+      runAfter:
+        - prepare-dockerfile
       taskRef:
         resolver: cluster
         params:

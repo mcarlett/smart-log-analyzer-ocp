@@ -45,25 +45,16 @@ spec:
         echo "Export completed. Contents of ${EXPORT_DIR}:"
         ls -la "${EXPORT_DIR}"
 
-        DOCKERFILE="${EXPORT_DIR}/src/main/docker/Dockerfile.jvm"
-        if [ ! -f "${DOCKERFILE}" ]; then
-          echo "Dockerfile.jvm not found, generating one..."
-          mkdir -p "${EXPORT_DIR}/src/main/docker"
-          cat > "${DOCKERFILE}" <<'EOF'
-        FROM registry.access.redhat.com/ubi9/openjdk-21-runtime:latest
-        ENV LANGUAGE='en_US:en'
-        COPY --chown=185 target/quarkus-app/lib/ /deployments/lib/
-        COPY --chown=185 target/quarkus-app/*.jar /deployments/
-        COPY --chown=185 target/quarkus-app/app/ /deployments/app/
-        COPY --chown=185 target/quarkus-app/quarkus/ /deployments/quarkus/
-        EXPOSE 8080
-        USER 185
-        ENV JAVA_OPTS_APPEND="-Dquarkus.http.host=0.0.0.0 -Djava.util.logging.manager=org.jboss.logmanager.LogManager"
-        ENV JAVA_APP_JAR="/deployments/quarkus-run.jar"
-        ENTRYPOINT [ "/opt/jboss/container/java/run/run-java.sh" ]
-        EOF
-        else
-          echo "Dockerfile.jvm already exists, skipping generation."
-        fi
+        APP_PROPS="${EXPORT_DIR}/src/main/resources/application.properties"
+        SRC_DIR="$(workspaces.source.path)/$(params.app-path)"
+
+        for PROPS_FILE in application.properties application-dev.properties; do
+          if [ -f "${SRC_DIR}/${PROPS_FILE}" ]; then
+            echo "Found ${PROPS_FILE} in source, appending to exported application.properties..."
+            echo "" >> "${APP_PROPS}"
+            echo "# From ${PROPS_FILE}" >> "${APP_PROPS}"
+            cat "${SRC_DIR}/${PROPS_FILE}" >> "${APP_PROPS}"
+          fi
+        done
 
         chmod -R 777 "${EXPORT_DIR}"

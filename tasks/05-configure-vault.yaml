@@ -1,0 +1,71 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: configure-vault
+spec:
+  params:
+    - name: namespace
+      type: string
+      description: Target namespace
+    - name: vault-token
+      type: string
+      description: Vault root token
+    - name: resources-path
+      type: string
+      default: resources/vault
+      description: Path within the workspace to the Vault resource files
+  workspaces:
+    - name: source
+      description: Workspace containing the resource files
+  steps:
+    - name: configure
+      image: quay.io/openshift/origin-cli:latest
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        NS="$(params.namespace)"
+
+        echo "Waiting for vault-0 pod to be ready..."
+        oc wait --for=condition=Ready pod/vault-0 -n "${NS}" --timeout=120s
+        echo "Vault pod is ready."
+
+        ROOT_TOKEN="$(params.vault-token)"
+
+        echo "Writing infra-accounts secrets to Vault..."
+        oc get secret infra-accounts -n "${NS}" -o jsonpath='{.data}' | \
+          sed 's/[{}]//g' | tr ',' '\n' | while IFS=: read -r KEY VALUE; do
+            KEY=$(echo "${KEY}" | tr -d '"')
+            DECODED=$(echo "${VALUE}" | tr -d '"' | base64 -d)
+            echo "  Writing secret/${KEY}..."
+            oc exec -n "${NS}" vault-0 -- sh -c "VAULT_TOKEN=${ROOT_TOKEN} vault kv put secret/${KEY} value=${DECODED}"
+          done
+
+        echo "Vault secrets stored."
+
+        RESOURCES="$(workspaces.source.path)/$(params.resources-path)"
+
+        echo "Creating sa-hashicorp-vault service account..."
+        oc apply -n "${NS}" -f "${RESOURCES}/sa-hashicorp-vault.yaml"
+
+        echo "Enabling Kubernetes auth method in Vault..."
+        oc exec -n "${NS}" vault-0 -- sh -c "VAULT_TOKEN=${ROOT_TOKEN} vault auth enable kubernetes" || true
+
+        echo "Configuring Kubernetes auth..."
+        oc exec -n "${NS}" vault-0 -- sh -c "VAULT_TOKEN=${ROOT_TOKEN} vault write auth/kubernetes/config kubernetes_host=\"https://\${KUBERNETES_PORT_443_TCP_ADDR}:443\""
+
+        echo "Creating Vault policy for sa-hashicorp-vault..."
+        oc exec -i -n "${NS}" vault-0 -- sh -c "VAULT_TOKEN=${ROOT_TOKEN} vault policy write sa-hashicorp-vault -" <<EOF
+        path "secret/data/*" {
+          capabilities = ["read"]
+        }
+        EOF
+
+        echo "Creating Kubernetes auth role for sa-hashicorp-vault..."
+        oc exec -n "${NS}" vault-0 -- sh -c "VAULT_TOKEN=${ROOT_TOKEN} vault write auth/kubernetes/role/sa-hashicorp-vault \
+          bound_service_account_names=sa-hashicorp-vault \
+          bound_service_account_namespaces=${NS} \
+          policies=sa-hashicorp-vault \
+          ttl=24h"
+
+        echo "Vault Kubernetes auth configured."

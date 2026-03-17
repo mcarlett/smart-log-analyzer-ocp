@@ -1,0 +1,55 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: create-infra-endpoints
+spec:
+  params:
+    - name: namespace
+      type: string
+      description: Target namespace
+    - name: amq-name
+      type: string
+      default: artemis
+      description: Name of the ActiveMQArtemis instance
+    - name: infinispan-name
+      type: string
+      default: infinispan
+      description: Name of the Infinispan cluster
+  steps:
+    - name: create-configmap
+      image: quay.io/openshift/origin-cli:latest
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        NS="$(params.namespace)"
+        AMQ="$(params.amq-name)"
+        ISPN="$(params.infinispan-name)"
+
+        AMQ_AMQP_HOST="${AMQ}-amqp-0-svc.${NS}.svc"
+        AMQ_AMQP_PORT="5672"
+        AMQ_CONSOLE_HOST="${AMQ}-wconsj-0-svc.${NS}.svc"
+        AMQ_CONSOLE_PORT="8161"
+        ISPN_HOST="${ISPN}.${NS}.svc"
+        ISPN_PORT="11222"
+        VAULT_HOST="vault.${NS}.svc"
+        VAULT_PORT="8200"
+
+        echo "Creating ConfigMap infra-endpoints in namespace ${NS}..."
+
+        oc create configmap infra-endpoints \
+          -n "${NS}" \
+          --from-literal=amq.host="${AMQ_AMQP_HOST}" \
+          --from-literal=amq.port="${AMQ_AMQP_PORT}" \
+          --from-literal=amq.url="amqp://${AMQ_AMQP_HOST}:${AMQ_AMQP_PORT}" \
+          --from-literal=amq.console.url="https://${AMQ_CONSOLE_HOST}:${AMQ_CONSOLE_PORT}" \
+          --from-literal=infinispan.host="${ISPN_HOST}" \
+          --from-literal=infinispan.port="${ISPN_PORT}" \
+          --from-literal=infinispan.url="https://${ISPN_HOST}:${ISPN_PORT}" \
+          --from-literal=vault.host="${VAULT_HOST}" \
+          --from-literal=vault.port="${VAULT_PORT}" \
+          --from-literal=vault.url="http://${VAULT_HOST}:${VAULT_PORT}" \
+          --dry-run=client -o yaml | oc apply -n "${NS}" -f -
+
+        echo "ConfigMap infra-endpoints created:"
+        oc get configmap infra-endpoints -n "${NS}" -o yaml
