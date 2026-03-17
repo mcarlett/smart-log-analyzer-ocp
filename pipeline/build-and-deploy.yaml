@@ -271,6 +271,9 @@ spec:
               --from=configmap/infra-endpoints
 
             oc set env deployment/"${APP}" -n "${NS}" \
+              --from=configmap/otel-infra-endpoints
+
+            oc set env deployment/"${APP}" -n "${NS}" \
               --from=secret/vault-token
 
             # Workaround for Infinispan client 16.x Netty event loop incompatibility

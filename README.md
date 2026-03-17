@@ -52,7 +52,8 @@ smart-log-analyzer-ocp/
     ├── pvc/
     │   └── maven-repo.yaml                  # PVC for persistent Maven repository cache (1Gi)
     ├── configmaps/
-    │   └── base-image-config.yaml           # Dockerfile for building the application image
+    │   ├── base-image-config.yaml           # Dockerfile for building the application image
+    │   └── otel-infra-endpoints.yaml        # Endpoints for the existing OpenTelemetry infrastructure
     └── secrets/
         └── infra-accounts.yaml              # Infrastructure credentials (AMQ Broker, Data Grid)
 ```
@@ -187,6 +188,14 @@ The `infra-endpoints` ConfigMap is created automatically by the `infra-deploy` p
 | `INFINISPAN_HOSTS` | `infinispan.slog-analyzer.svc:11222` | Infinispan host:port (for Camel Infinispan component) |
 | `HASHICORP_HOST` | `vault.slog-analyzer.svc` | Vault host (for Camel HashiCorp Vault component) |
 | `HASHICORP_PORT` | `8200` | Vault port (for Camel HashiCorp Vault component) |
+
+### OpenTelemetry infrastructure endpoints
+
+The `otel-infra-endpoints` ConfigMap (defined in `resources/configmaps/otel-infra-endpoints.yaml`) contains the connection details for the existing OpenTelemetry infrastructure, which is the source of traces and logs to analyze:
+
+| Key | Default | Description |
+|---|---|---|
+| `KAFKA_BROKERS` | `camel-cluster-kafka-bootstrap.camel-otel-infra.svc.cluster.local:9093` | Kafka bootstrap server where OpenTelemetry traces and logs are published |
 
 ### Vault
 
