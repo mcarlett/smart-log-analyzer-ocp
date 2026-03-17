@@ -117,7 +117,26 @@ spec:
         - name: source
           workspace: shared-workspace
 
-    # Step 3: Export Camel application to Quarkus project
+    # Step 3a: Create app-config ConfigMap from resolved properties file
+    - name: create-app-config
+      runAfter:
+        - fix-workspace
+      taskRef:
+        name: create-app-config
+      params:
+        - name: app-name
+          value: $(params.app-name)
+        - name: app-path
+          value: repo/$(params.app-path)
+        - name: app-config-path
+          value: config/resources/app-config
+        - name: namespace
+          value: $(params.namespace)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    # Step 3b: Export Camel application to Quarkus project
     - name: camel-export
       runAfter:
         - fix-workspace
@@ -132,16 +151,32 @@ spec:
           value: $(params.gav)
         - name: export-dir
           value: export
-        - name: app-config-path
-          value: config/resources/app-config
       workspaces:
         - name: source
           workspace: shared-workspace
 
-    # Step 4: Build Quarkus application with Maven
-    - name: maven-build
+    # Step 4: Add Quarkus extensions
+    - name: add-quarkus-extension
       runAfter:
         - camel-export
+      taskRef:
+        name: add-quarkus-extension
+      params:
+        - name: extensions
+          value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault"
+        - name: export-dir
+          value: export
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: maven-repo
+          workspace: shared-workspace
+          subPath: m2-settings
+
+    # Step 5: Build Quarkus application with Maven
+    - name: maven-build
+      runAfter:
+        - add-quarkus-extension
       taskRef:
         resolver: cluster
         params:
@@ -154,6 +189,7 @@ spec:
       params:
         - name: GOALS
           value:
+            - -Dmaven.repo.local=/workspace/maven_settings/repository
             - clean
             - package
         - name: SUBDIRECTORY
@@ -161,8 +197,11 @@ spec:
       workspaces:
         - name: source
           workspace: shared-workspace
+        - name: maven_settings
+          workspace: shared-workspace
+          subPath: m2-settings
 
-    # Step 4: Write Dockerfile from ConfigMap to workspace
+    # Step 5: Write Dockerfile from ConfigMap to workspace
     - name: prepare-dockerfile
       runAfter:
         - maven-build
@@ -229,12 +268,18 @@ spec:
               --dry-run=client -o yaml | oc apply -n "${NS}" -f -
 
             oc set env deployment/"${APP}" -n "${NS}" \
-              --from=configmap/infra-endpoints \
-              --keys=ARTEMIS_BROKER_URL,INFINISPAN_HOSTS,HASHICORP_HOST,HASHICORP_PORT
+              --from=configmap/infra-endpoints
 
             oc set env deployment/"${APP}" -n "${NS}" \
-              --from=secret/vault-token \
-              --keys=HASHICORP_TOKEN
+              --from=secret/vault-token
 
-            oc rollout status deployment/"${APP}" -n "${NS}" --timeout=300s
+            # Mount app-config ConfigMap as /deployments/config/application.properties
+            oc set volume deployment/"${APP}" -n "${NS}" \
+              --add --overwrite \
+              --name=app-config \
+              --type=configmap \
+              --configmap-name="${APP}-config" \
+              --mount-path=/deployments/config
+
+            oc wait --for=condition=Available deployment/"${APP}" -n "${NS}" --timeout=300s
             echo "Deployment ${APP} is ready."

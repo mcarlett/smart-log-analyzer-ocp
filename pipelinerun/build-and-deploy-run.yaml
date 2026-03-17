@@ -22,10 +22,5 @@ spec:
       value: "com.example:correlator:1.0.0"
   workspaces:
     - name: shared-workspace
-      volumeClaimTemplate:
-        spec:
-          accessModes:
-            - ReadWriteOnce
-          resources:
-            requests:
-              storage: 1Gi
+      persistentVolumeClaim:
+        claimName: maven-repo

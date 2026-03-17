@@ -15,7 +15,9 @@ smart-log-analyzer-ocp/
 │   ├── 05-configure-vault.yaml      # Waits for Vault pod and stores infra-accounts secrets
 │   ├── 10-init-workspace.yaml         # Fixes PVC permissions for workspace
 │   ├── 11-camel-export.yaml           # Runs camel export to Quarkus
-│   └── 12-prepare-dockerfile.yaml     # Writes Dockerfile from base-image-config ConfigMap to workspace
+│   ├── 12-add-quarkus-extension.yaml  # Adds Quarkus extensions to the exported project
+│   ├── 13-prepare-dockerfile.yaml     # Writes Dockerfile from base-image-config ConfigMap to workspace
+│   └── 14-create-app-config.yaml      # Creates app-config ConfigMap from resolved properties file
 │
 ├── pipeline/
 │   ├── build-and-deploy.yaml      # Pipeline orchestrating build tasks
@@ -47,6 +49,8 @@ smart-log-analyzer-ocp/
     │       └── application-prod.properties  # Production config (OpenTelemetry)
     ├── vault/
     │   └── sa-hashicorp-vault.yaml          # ServiceAccount for application access to Vault
+    ├── pvc/
+    │   └── maven-repo.yaml                  # PVC for persistent Maven repository cache (1Gi)
     ├── configmaps/
     │   └── base-image-config.yaml           # Dockerfile for building the application image
     └── secrets/
@@ -79,19 +83,24 @@ init-workspace → git-clone → create-operator-group → install-datagrid    �
 ### build-and-deploy
 
 ```
-init-workspace → git-clone → fix-workspace → camel-export → maven (package) → prepare-dockerfile → buildah (build image) → deploy
+                 → git-clone        ↘                → create-app-config
+init-workspace →                     fix-workspace →                      → camel-export → add-quarkus-extension → maven (package) → prepare-dockerfile → buildah (build image) → deploy
+                 → git-clone-config ↗
 ```
 
 | Task | Source | Description |
 |---|---|---|
 | **init-workspace** | Custom | Fixes PVC permissions |
 | **git-clone** | `openshift-pipelines` | Clones the source repository |
+| **git-clone-config** | `openshift-pipelines` | Clones the config repository (containing `resources/app-config/`) |
 | **fix-workspace** | Custom | Fixes permissions after git-clone for subsequent tasks |
-| **camel-export** | Custom | Runs `camel export --runtime=quarkus` to produce a Maven project |
-| **maven** | `openshift-pipelines` | Runs `./mvnw clean package` to build the Quarkus application |
+| **create-app-config** | Custom | Resolves properties file (`application-prod.properties` > `application-dev.properties` > `application.properties`) and creates a `<app-name>-config` ConfigMap, mounted at `/deployments/config/application.properties` in the deployment |
+| **camel-export** | Custom | Runs `camel export --runtime=quarkus` to generate a Quarkus project |
+| **add-quarkus-extension** | Custom | Adds Quarkus extensions (e.g. `camel-quarkus-hashicorp-vault`) to the exported project |
+| **maven** | `openshift-pipelines` | Runs `./mvnw clean package` to build the Quarkus application, uses a persistent `maven-repo` PVC (1Gi) to cache dependencies across builds |
 | **prepare-dockerfile** | Custom | Writes Dockerfile from `base-image-config` ConfigMap to workspace |
 | **buildah** | `openshift-pipelines` | Builds the container image from `src/main/docker/Dockerfile.jvm` |
-| **openshift-client** | `openshift-pipelines` | Creates or updates the Deployment |
+| **openshift-client** | `openshift-pipelines` | Creates or updates the Deployment, injects env vars from `infra-endpoints` ConfigMap and `vault-token` Secret, mounts `<app-name>-config` ConfigMap at `/deployments/config/` |
 
 ## Prerequisites
 
@@ -111,6 +120,7 @@ oc new-project slog-analyzer
 oc apply -f resources/rbac/
 oc apply -f resources/secrets/
 oc apply -f resources/configmaps/
+oc apply -f resources/pvc/
 oc apply -f tasks/
 oc apply -f pipeline/
 
@@ -156,6 +166,8 @@ tkn pipeline start build-and-deploy \
 | `namespace` | `slog-analyzer` | Target namespace |
 | `camel-image` | `quay.io/mcarlett/camel-launcher:4.18.0` | Image with the Camel CLI (configurable) |
 | `gav` | `com.example:correlator:1.0.0` | Maven groupId:artifactId:version |
+| `config-repo-url` | `https://github.com/mcarlett/smart-log-analyzer-ocp.git` | Git repository URL containing app-config |
+| `config-repo-revision` | `main` | Git revision for the config repository |
 
 ### infra-deploy parameters
 
@@ -185,6 +197,10 @@ The Vault deployment tasks (`generate-vault-token`, `install-vault`, `configure-
 4. Writes all keys from the `infra-accounts` secret into Vault (e.g. `secret/amq-username`, `secret/datagrid-password`)
 5. Creates a `sa-hashicorp-vault` ServiceAccount and configures Vault Kubernetes auth (enables auth method, creates a read-only policy on `secret/data/*`, and binds the role to the service account)
 6. Creates a `vault-token` Secret containing the `HASHICORP_TOKEN` for application use
+
+### Maven repository cache
+
+The `build-and-deploy` pipeline uses a persistent `maven-repo` PVC (1Gi, defined in `resources/pvc/maven-repo.yaml`) to cache Maven dependencies across pipeline runs. The PVC is mounted via `subPath: m2-settings` on the `shared-workspace` to both the `add-quarkus-extension` and `maven` tasks, avoiding repeated downloads and speeding up subsequent builds.
 
 ### Infrastructure credentials
 
