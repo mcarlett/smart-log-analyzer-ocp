@@ -15,6 +15,10 @@ spec:
       type: string
       default: "com.example:camel-app:1.0.0"
       description: Maven groupId:artifactId:version for the exported project
+    - name: quarkus-version
+      type: string
+      default: "3.32.3"
+      description: Quarkus platform version for the exported project
     - name: export-dir
       type: string
       default: "export"
@@ -38,6 +42,7 @@ spec:
 
         camel export \
           --runtime=quarkus \
+          --quarkus-version=$(params.quarkus-version) \
           --gav="$(params.gav)" \
           --fresh \
           --dir="${EXPORT_DIR}"
