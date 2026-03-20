@@ -15,23 +15,26 @@ oc apply -f log-generator/instrumentation.yaml
 ## Setup
 
 ```bash
-# Create the namespace
-oc new-project log-generator
+NS=log-generator
+
+# Create the namespace (or use an existing one)
+oc new-project $NS
 
 # Apply the Instrumentation CR (edit the endpoint first if needed)
-oc apply -f log-generator/instrumentation.yaml
+oc apply -f log-generator/instrumentation.yaml -n $NS
 
 # Create the pipeline
-oc apply -f log-generator/pipeline.yaml
+oc apply -f log-generator/pipeline.yaml -n $NS
 
 # Run the pipeline
-oc create -f log-generator/pipelinerun.yaml
+oc create -f log-generator/pipelinerun.yaml -n $NS
 ```
 
 ## Parameters
 
 | Parameter | Default | Description |
 |---|---|---|
+| `namespace` | `log-generator` | Target namespace for deployment |
 | `repo-url` | `https://github.com/apache/camel-jbang-examples.git` | Git repository URL |
 | `repo-branch` | `main` | Git branch |
 | `app-path` | `smart-log-analyzer/log-generator` | Path to the app within the repo |

@@ -2,7 +2,6 @@ apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   generateName: deploy-log-generator-run-
-  namespace: log-generator
 spec:
   pipelineRef:
     name: deploy-log-generator

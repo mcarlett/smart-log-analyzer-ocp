@@ -2,7 +2,6 @@ apiVersion: opentelemetry.io/v1alpha1
 kind: Instrumentation
 metadata:
   name: log-generator-instrumentation
-  namespace: log-generator
 spec:
   exporter:
     endpoint: http://camel-otel-collector-collector.camel-otel-infra.svc.cluster.local:4318

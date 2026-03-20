@@ -2,9 +2,11 @@ apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
   name: deploy-log-generator
-  namespace: log-generator
 spec:
   params:
+    - name: namespace
+      type: string
+      default: "log-generator"
     - name: repo-url
       type: string
       default: "https://github.com/apache/camel-jbang-examples.git"
@@ -78,7 +80,7 @@ spec:
       params:
         - name: SCRIPT
           value: |
-            NS="log-generator"
+            NS="$(params.namespace)"
             APP="log-generator"
             IMAGE="$(params.image)"
             APP_PATH="$(params.app-path)"
