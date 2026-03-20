@@ -296,6 +296,14 @@ spec:
               --configmap-name="${APP}-config" \
               --mount-path=/deployments/config
 
+            # Mount Strimzi Kafka cluster CA certificate
+            oc set volume deployment/"${APP}" -n "${NS}" \
+              --add --overwrite \
+              --name=kafka-ca \
+              --type=secret \
+              --secret-name=kafka-cluster-ca \
+              --mount-path=/etc/kafka-ca
+
             oc set resources deployment/"${APP}" -n "${NS}" \
               --limits=memory=2Gi
 

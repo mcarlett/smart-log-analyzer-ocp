@@ -54,8 +54,10 @@ smart-log-analyzer-ocp/
     ├── configmaps/
     │   ├── base-image-config.yaml           # Dockerfile for building the application image
     │   └── otel-infra-endpoints.yaml        # Endpoints for the existing OpenTelemetry infrastructure
-    └── secrets/
-        └── infra-accounts.yaml              # Infrastructure credentials (AMQ Broker, Data Grid)
+    ├── secrets/
+    │   └── infra-accounts.yaml              # Infrastructure credentials (AMQ Broker, Data Grid)
+    └── templates/
+        └── kafka-cluster-ca.yaml            # Template for Kafka cluster CA certificate (must be populated and applied manually)
 ```
 
 ## Pipeline Execution Order
@@ -101,13 +103,14 @@ init-workspace →                     fix-workspace →                      �
 | **maven** | `openshift-pipelines` | Runs `./mvnw clean package` to build the Quarkus application, uses a persistent `maven-repo` PVC (1Gi) to cache dependencies across builds |
 | **prepare-dockerfile** | Custom | Writes Dockerfile from `base-image-config` ConfigMap to workspace |
 | **buildah** | `openshift-pipelines` | Builds the container image from `src/main/docker/Dockerfile.jvm` |
-| **openshift-client** | `openshift-pipelines` | Creates or updates the Deployment, injects env vars from `infra-endpoints` ConfigMap and `vault-token` Secret, mounts `<app-name>-config` ConfigMap at `/deployments/config/` |
+| **openshift-client** | `openshift-pipelines` | Creates or updates the Deployment (memory limit 2Gi), injects env vars from `infra-endpoints` ConfigMap and `vault-token` Secret, mounts `<app-name>-config` ConfigMap at `/deployments/config/` and `kafka-cluster-ca` Secret at `/etc/kafka-ca` |
 
 ## Prerequisites
 
 - OpenShift 4 cluster
 - Red Hat OpenShift Pipelines operator installed
 - Tekton CLI (`tkn`) (optional, for monitoring runs)
+- Kafka cluster CA certificate: populate `resources/secrets/kafka-cluster-ca.yaml` with the CA certificate (PEM format) of the external Kafka cluster used for OpenTelemetry data
 
 ## Usage
 
@@ -210,6 +213,22 @@ The Vault deployment tasks (`generate-vault-token`, `install-vault`, `configure-
 ### Maven repository cache
 
 The `build-and-deploy` pipeline uses a persistent `maven-repo` PVC (1Gi, defined in `resources/pvc/maven-repo.yaml`) to cache Maven dependencies across pipeline runs. The PVC is mounted via `subPath: m2-settings` on the `shared-workspace` to both the `add-quarkus-extension` and `maven` tasks, avoiding repeated downloads and speeding up subsequent builds.
+
+### Kafka TLS
+
+The Kafka cluster (Strimzi) uses TLS on port 9093. The `kafka-cluster-ca` secret must contain the cluster CA certificate used to verify the Kafka broker's identity. The deploy task mounts this secret at `/etc/kafka-ca` in the application pod, and the correlator is configured to use `/etc/kafka-ca/ca.crt` as the SSL truststore.
+
+To populate the secret, copy the CA certificate from the Kafka cluster namespace:
+
+```bash
+# Extract the CA cert from the Strimzi cluster (adjust namespace and cluster name as needed)
+oc get secret camel-cluster-cluster-ca-cert -n camel-otel-infra -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/ca.crt
+
+# Create the secret in the target namespace
+oc create secret generic kafka-cluster-ca --from-file=ca.crt=/tmp/ca.crt -n slog-analyzer
+```
+
+Alternatively, edit the template at `resources/templates/kafka-cluster-ca.yaml` with the PEM-encoded CA certificate and apply it manually with `oc apply -f resources/templates/kafka-cluster-ca.yaml`.
 
 ### Infrastructure credentials
 
