@@ -44,6 +44,26 @@ spec:
       type: string
       description: Comma-separated list of Quarkus extensions to add
       default: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault"
+    - name: storage-mount-point
+      type: string
+      description: "Mount point for persistent storage. If set, creates a PVC named <app-name>-storage and mounts it at this path."
+      default: ""
+    - name: storage-size
+      type: string
+      description: Size of the persistent storage PVC
+      default: "1Gi"
+    - name: extra-env
+      type: string
+      description: "Comma-separated list of extra environment variables (key=value) to set on the deployment"
+      default: ""
+    - name: replicas
+      type: string
+      description: Number of replicas for the deployment
+      default: "1"
+    - name: expose
+      type: string
+      description: "If true, creates a Route to expose the deployment externally"
+      default: "false"
 
   workspaces:
     - name: shared-workspace
@@ -268,6 +288,7 @@ spec:
             echo "Deploying ${APP} to namespace ${NS}..."
             oc create deployment "${APP}" \
               --image="${IMAGE}" \
+              --replicas=0 \
               -n "${NS}" \
               --dry-run=client -o yaml | oc apply -n "${NS}" -f -
 
@@ -316,6 +337,52 @@ spec:
             oc set resources deployment/"${APP}" -n "${NS}" \
               --limits=memory=2Gi
 
+            # Create and mount persistent storage if storage-mount-point is set
+            STORAGE_MOUNT="$(params.storage-mount-point)"
+            if [ -n "${STORAGE_MOUNT}" ]; then
+              STORAGE_SIZE="$(params.storage-size)"
+              PVC_NAME="${APP}-storage"
+
+              cat <<PVCEOF | oc apply -n "${NS}" -f -
+            apiVersion: v1
+            kind: PersistentVolumeClaim
+            metadata:
+              name: ${PVC_NAME}
+              namespace: ${NS}
+            spec:
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: ${STORAGE_SIZE}
+            PVCEOF
+
+              oc set volume deployment/"${APP}" -n "${NS}" \
+                --add --overwrite \
+                --name=app-storage \
+                --type=persistentVolumeClaim \
+                --claim-name="${PVC_NAME}" \
+                --mount-path="${STORAGE_MOUNT}"
+            fi
+
+            # Set extra environment variables if provided
+            EXTRA_ENV="$(params.extra-env)"
+            if [ -n "${EXTRA_ENV}" ]; then
+              IFS=',' read -ra PAIRS <<< "${EXTRA_ENV}"
+              oc set env deployment/"${APP}" -n "${NS}" "${PAIRS[@]}"
+            fi
+
+            # Expose the deployment via a Route if requested
+            EXPOSE="$(params.expose)"
+            if [ "${EXPOSE}" = "true" ]; then
+              oc expose deployment/"${APP}" -n "${NS}" --port=8080
+              oc expose svc/"${APP}" -n "${NS}"
+              ROUTE_HOST=$(oc get route "${APP}" -n "${NS}" -o jsonpath='{.spec.host}')
+              echo "Route created: http://${ROUTE_HOST}"
+            fi
+
+            # Scale up and wait for rollout
+            oc scale deployment/"${APP}" -n "${NS}" --replicas=$(params.replicas)
             oc rollout status deployment/"${APP}" -n "${NS}" --timeout=300s
             oc wait --for=condition=Available deployment/"${APP}" -n "${NS}" --timeout=300s
             echo "Deployment ${APP} is ready."

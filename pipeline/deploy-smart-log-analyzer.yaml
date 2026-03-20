@@ -231,6 +231,12 @@ spec:
                   value: "$(params.config-repo-revision)"
                 - name: extensions
                   value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault,org.apache.camel.quarkus:camel-quarkus-platform-http"
+                - name: storage-mount-point
+                  value: "/storage"
+                - name: extra-env
+                  value: "ANALYZER_STORAGE_ROOT=/storage"
+                - name: expose
+                  value: "true"
               workspaces:
                 - name: shared-workspace
                   volumeClaimTemplate:
