@@ -1,0 +1,10 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: deploy-smart-log-analyzer-run-
+spec:
+  pipelineRef:
+    name: deploy-smart-log-analyzer
+  params:
+    - name: namespace
+      value: slog-analyzer

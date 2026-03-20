@@ -40,6 +40,10 @@ spec:
       type: string
       description: Git revision for the config repository
       default: main
+    - name: extensions
+      type: string
+      description: Comma-separated list of Quarkus extensions to add
+      default: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault"
 
   workspaces:
     - name: shared-workspace
@@ -163,7 +167,7 @@ spec:
         name: add-quarkus-extension
       params:
         - name: extensions
-          value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault"
+          value: "$(params.extensions)"
         - name: export-dir
           value: export
       workspaces:
@@ -283,6 +287,9 @@ spec:
 
             # Inject Data Grid credentials for the Quarkus Infinispan client extension,
             # which cannot resolve Camel vault placeholders (hashicorp:secret:*)
+            oc set env deployment/"${APP}" -n "${NS}" \
+              DATAGRID_USERNAME- DATAGRID_PASSWORD-
+
             oc patch deployment "${APP}" -n "${NS}" --type=json -p '[
               {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"DATAGRID_USERNAME","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"datagrid-username"}}}},
               {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"DATAGRID_PASSWORD","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"datagrid-password"}}}}
