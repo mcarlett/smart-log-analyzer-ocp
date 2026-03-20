@@ -1,0 +1,120 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: deploy-log-generator
+  namespace: log-generator
+spec:
+  params:
+    - name: repo-url
+      type: string
+      default: "https://github.com/apache/camel-jbang-examples.git"
+    - name: repo-branch
+      type: string
+      default: "main"
+    - name: app-path
+      type: string
+      default: "smart-log-analyzer/log-generator"
+    - name: image
+      type: string
+      default: "quay.io/mcarlett/camel-launcher:4.18.0"
+  workspaces:
+    - name: shared-workspace
+  tasks:
+    - name: clone
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-clone
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: URL
+          value: $(params.repo-url)
+        - name: REVISION
+          value: $(params.repo-branch)
+        - name: DELETE_EXISTING
+          value: "true"
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+
+    - name: fix-permissions
+      runAfter:
+        - clone
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: fix-permissions
+            image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+            securityContext:
+              runAsUser: 0
+            script: |
+              #!/usr/bin/env bash
+              chmod -R 777 $(workspaces.source.path)
+              rm -rf $(workspaces.source.path)/lost+found
+
+    - name: deploy
+      runAfter:
+        - fix-permissions
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: openshift-client
+          - name: namespace
+            value: openshift-pipelines
+      workspaces:
+        - name: manifest_dir
+          workspace: shared-workspace
+      params:
+        - name: SCRIPT
+          value: |
+            NS="log-generator"
+            APP="log-generator"
+            IMAGE="$(params.image)"
+            APP_PATH="$(params.app-path)"
+
+            cd $(workspaces.manifest_dir.path)/"${APP_PATH}"
+
+            # Create a ConfigMap with the Camel route
+            oc create configmap ${APP}-routes \
+              --from-file=log-generator.camel.yaml \
+              -n "${NS}" --dry-run=client -o yaml | oc apply -f -
+
+            # Create the deployment
+            oc create deployment ${APP} \
+              --image="${IMAGE}" \
+              --replicas=0 \
+              -n "${NS}" --dry-run=client -o yaml | oc apply -f -
+
+            # Mount the routes ConfigMap
+            oc set volume deployment/${APP} \
+              -n "${NS}" \
+              --add --overwrite \
+              --name=routes \
+              --type=configmap \
+              --configmap-name=${APP}-routes \
+              --mount-path=/routes
+
+            # Annotate for OTel auto-instrumentation
+            oc patch deployment/${APP} -n "${NS}" --type=merge \
+              -p='{"spec":{"template":{"metadata":{"annotations":{"instrumentation.opentelemetry.io/inject-java":"true"}}}}}'
+
+            # Set the container command and writable home directory
+            oc patch deployment/${APP} -n "${NS}" --type=json \
+              -p='[{"op":"add","path":"/spec/template/spec/containers/0/command","value":["camel","run","/routes/log-generator.camel.yaml"]},{"op":"add","path":"/spec/template/spec/containers/0/workingDir","value":"/tmp"}]'
+            oc set env deployment/${APP} -n "${NS}" HOME=/tmp
+
+            # Scale up
+            oc scale deployment/${APP} -n "${NS}" --replicas=1
+            oc rollout status deployment/${APP} -n "${NS}" --timeout=120s
+            echo "Log generator deployed successfully."
