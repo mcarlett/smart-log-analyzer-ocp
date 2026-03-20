@@ -296,6 +296,9 @@ spec:
               --configmap-name="${APP}-config" \
               --mount-path=/deployments/config
 
+            oc set resources deployment/"${APP}" -n "${NS}" \
+              --limits=memory=2Gi
+
             oc rollout status deployment/"${APP}" -n "${NS}" --timeout=300s
             oc wait --for=condition=Available deployment/"${APP}" -n "${NS}" --timeout=300s
             echo "Deployment ${APP} is ready."
