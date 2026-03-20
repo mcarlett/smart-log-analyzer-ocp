@@ -20,12 +20,14 @@ smart-log-analyzer-ocp/
 │   └── 14-create-app-config.yaml      # Creates app-config ConfigMap from resolved properties file
 │
 ├── pipeline/
-│   ├── build-and-deploy.yaml      # Pipeline orchestrating build tasks
-│   └── infra-deploy.yaml          # Pipeline to install operators and deploy AMQ Broker, Infinispan + Vault
+│   ├── build-and-deploy.yaml           # Pipeline orchestrating build tasks for a single component
+│   ├── deploy-smart-log-analyzer.yaml  # Pipeline that deploys all components (correlator, analyzer, ui-console) in parallel
+│   └── infra-deploy.yaml               # Pipeline to install operators and deploy AMQ Broker, Infinispan + Vault
 │
 ├── pipelinerun/
-│   ├── build-and-deploy-run.yaml  # Example PipelineRun for the correlator component
-│   └── infra-deploy-run.yaml      # Example PipelineRun for operator installation
+│   ├── build-and-deploy-run.yaml           # Example PipelineRun for the correlator component
+│   ├── deploy-smart-log-analyzer-run.yaml  # Example PipelineRun to deploy all components
+│   └── infra-deploy-run.yaml               # Example PipelineRun for operator installation
 │
 └── resources/
     ├── amq-broker/
@@ -40,11 +42,11 @@ smart-log-analyzer-ocp/
     │   └── pipeline-clusterrolebinding.yaml  # Binds the ClusterRole to the pipeline SA
     ├── app-config/
     │   ├── correlator/
-    │   │   └── application-prod.properties  # Production config (Vault refs for credentials)
+    │   │   └── application-prod.properties  # Production config (Kafka SSL, Vault, env var credentials)
     │   ├── analyzer/
-    │   │   └── application-prod.properties  # Production config (Vault refs for credentials)
+    │   │   └── application-prod.properties  # Production config (Vault, env var credentials)
     │   ├── ui-console/
-    │   │   └── application-prod.properties  # Production config (Vault refs for credentials)
+    │   │   └── application-prod.properties  # Production config (Vault, env var credentials, REST API)
     │   └── log-generator/
     │       └── application-prod.properties  # Production config (OpenTelemetry)
     ├── vault/
@@ -103,7 +105,22 @@ init-workspace →                     fix-workspace →                      �
 | **maven** | `openshift-pipelines` | Runs `./mvnw clean package` to build the Quarkus application, uses a persistent `maven-repo` PVC (1Gi) to cache dependencies across builds |
 | **prepare-dockerfile** | Custom | Writes Dockerfile from `base-image-config` ConfigMap to workspace |
 | **buildah** | `openshift-pipelines` | Builds the container image from `src/main/docker/Dockerfile.jvm` |
-| **openshift-client** | `openshift-pipelines` | Creates or updates the Deployment (memory limit 2Gi), injects env vars from `infra-endpoints` ConfigMap and `vault-token` Secret, mounts `<app-name>-config` ConfigMap at `/deployments/config/` and `kafka-cluster-ca` Secret at `/etc/kafka-ca` |
+| **openshift-client** | `openshift-pipelines` | Creates or updates the Deployment (memory limit 2Gi), injects env vars from `infra-endpoints`, `otel-infra-endpoints` ConfigMaps, `vault-token` and `infra-accounts` Secrets (`AMQ_USERNAME`, `AMQ_PASSWORD`, `DATAGRID_USERNAME`, `DATAGRID_PASSWORD`), mounts `<app-name>-config` ConfigMap at `/deployments/config/` and `kafka-cluster-ca` Secret at `/etc/kafka-ca` |
+
+### deploy-smart-log-analyzer
+
+```
+                          → deploy-correlator  (build-and-deploy with extensions: hashicorp-vault)
+check-prerequisites  →    → deploy-analyzer    (build-and-deploy with extensions: hashicorp-vault)
+                          → deploy-ui-console  (build-and-deploy with extensions: hashicorp-vault, platform-http)
+```
+
+| Task | Source | Description |
+|---|---|---|
+| **check-prerequisites** | `openshift-pipelines` | Validates that the `kafka-cluster-ca` secret exists before proceeding |
+| **deploy-correlator** | `openshift-pipelines` | Triggers a `build-and-deploy` PipelineRun for the correlator component and waits for completion |
+| **deploy-analyzer** | `openshift-pipelines` | Triggers a `build-and-deploy` PipelineRun for the analyzer component and waits for completion |
+| **deploy-ui-console** | `openshift-pipelines` | Triggers a `build-and-deploy` PipelineRun for the ui-console component (with `camel-quarkus-platform-http`) and waits for completion |
 
 ## Prerequisites
 
@@ -131,8 +148,10 @@ oc apply -f pipeline/
 # Install operators and deploy AMQ Broker, Infinispan + Vault
 oc create -f pipelinerun/infra-deploy-run.yaml
 
-# Wait for infra-deploy to complete, then build and deploy the application
-oc create -f pipelinerun/build-and-deploy-run.yaml
+# Create the kafka-cluster-ca secret (see Kafka TLS section below)
+
+# Wait for infra-deploy to complete, then deploy all components
+oc create -f pipelinerun/deploy-smart-log-analyzer-run.yaml
 ```
 
 ### Monitor the run
@@ -172,6 +191,18 @@ tkn pipeline start build-and-deploy \
 | `gav` | `com.example:correlator:1.0.0` | Maven groupId:artifactId:version |
 | `config-repo-url` | `https://github.com/mcarlett/smart-log-analyzer-ocp.git` | Git repository URL containing app-config |
 | `config-repo-revision` | `main` | Git revision for the config repository |
+| `extensions` | `org.apache.camel.quarkus:camel-quarkus-hashicorp-vault` | Comma-separated list of Quarkus extensions to add |
+
+### deploy-smart-log-analyzer parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `repo-url` | `https://github.com/apache/camel-jbang-examples.git` | Git repository URL |
+| `repo-revision` | `main` | Git branch, tag, or commit SHA |
+| `namespace` | `slog-analyzer` | Target namespace |
+| `camel-image` | `quay.io/mcarlett/camel-launcher:4.18.0` | Image with the Camel CLI |
+| `config-repo-url` | `https://github.com/mcarlett/smart-log-analyzer-ocp.git` | Git repository URL containing app-config |
+| `config-repo-revision` | `main` | Git revision for the config repository |
 
 ### infra-deploy parameters
 
@@ -187,7 +218,7 @@ The `infra-endpoints` ConfigMap is created automatically by the `infra-deploy` p
 
 | Key | Example value | Description |
 |---|---|---|
-| `ARTEMIS_BROKER_URL` | `tcp://artemis-0-svc.slog-analyzer.svc:61616` | AMQ Broker core protocol URL (for JMS/ActiveMQ clients) |
+| `ARTEMIS_BROKER_URL` | `tcp://artemis-hdls-svc.slog-analyzer.svc:61616` | AMQ Broker headless service URL (for JMS/ActiveMQ clients) |
 | `INFINISPAN_HOSTS` | `infinispan.slog-analyzer.svc:11222` | Infinispan host:port (for Camel Infinispan component) |
 | `HASHICORP_HOST` | `vault.slog-analyzer.svc` | Vault host (for Camel HashiCorp Vault component) |
 | `HASHICORP_PORT` | `8200` | Vault port (for Camel HashiCorp Vault component) |

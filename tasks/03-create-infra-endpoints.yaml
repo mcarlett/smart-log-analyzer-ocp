@@ -35,7 +35,7 @@ spec:
 
         oc create configmap infra-endpoints \
           -n "${NS}" \
-          --from-literal=ARTEMIS_BROKER_URL="tcp://${AMQ}-0-svc.${NS}.svc:61616" \
+          --from-literal=ARTEMIS_BROKER_URL="tcp://${AMQ}-hdls-svc.${NS}.svc:61616" \
           --from-literal=INFINISPAN_HOSTS="${ISPN_HOST}:${ISPN_PORT}" \
           --from-literal=HASHICORP_HOST="${VAULT_HOST}" \
           --from-literal=HASHICORP_PORT="${VAULT_PORT}" \

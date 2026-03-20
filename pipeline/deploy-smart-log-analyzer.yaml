@@ -30,7 +30,37 @@ spec:
       default: main
 
   tasks:
+    - name: check-prerequisites
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: openshift-client
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: SCRIPT
+          value: |
+            NS="$(params.namespace)"
+            echo "Checking prerequisites..."
+
+            if ! oc get secret kafka-cluster-ca -n "${NS}" > /dev/null 2>&1; then
+              echo "ERROR: Secret 'kafka-cluster-ca' not found in namespace ${NS}."
+              echo "Create it before running this pipeline. See README.md prerequisites."
+              echo ""
+              echo "Example:"
+              echo "  oc get secret camel-cluster-cluster-ca-cert -n camel-otel-infra -o jsonpath='{.data.ca\\.crt}' | base64 -d > /tmp/ca.crt"
+              echo "  oc create secret generic kafka-cluster-ca --from-file=ca.crt=/tmp/ca.crt -n ${NS}"
+              exit 1
+            fi
+
+            echo "All prerequisites met."
+
     - name: deploy-correlator
+      runAfter:
+        - check-prerequisites
       taskRef:
         resolver: cluster
         params:
@@ -77,18 +107,23 @@ spec:
                   value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault"
               workspaces:
                 - name: shared-workspace
-                  persistentVolumeClaim:
-                    claimName: maven-repo
+                  volumeClaimTemplate:
+                    spec:
+                      accessModes:
+                        - ReadWriteOnce
+                      resources:
+                        requests:
+                          storage: 1Gi
             EOF
 
             echo "Waiting for correlator build-and-deploy to complete..."
-            RUN=$(oc get pipelinerun -n "${NS}" -l tekton.dev/pipeline=build-and-deploy --sort-by=.metadata.creationTimestamp -o name | tail -1)
+            RUN=$(oc get pipelinerun -n "${NS}" --sort-by=.metadata.creationTimestamp -o name | grep build-correlator | tail -1)
             oc wait "${RUN}" -n "${NS}" --for=condition=Succeeded --timeout=1800s
             echo "Correlator deployed successfully."
 
     - name: deploy-analyzer
       runAfter:
-        - deploy-correlator
+        - check-prerequisites
       taskRef:
         resolver: cluster
         params:
@@ -135,18 +170,23 @@ spec:
                   value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault"
               workspaces:
                 - name: shared-workspace
-                  persistentVolumeClaim:
-                    claimName: maven-repo
+                  volumeClaimTemplate:
+                    spec:
+                      accessModes:
+                        - ReadWriteOnce
+                      resources:
+                        requests:
+                          storage: 1Gi
             EOF
 
             echo "Waiting for analyzer build-and-deploy to complete..."
-            RUN=$(oc get pipelinerun -n "${NS}" -l tekton.dev/pipeline=build-and-deploy --sort-by=.metadata.creationTimestamp -o name | tail -1)
+            RUN=$(oc get pipelinerun -n "${NS}" --sort-by=.metadata.creationTimestamp -o name | grep build-analyzer | tail -1)
             oc wait "${RUN}" -n "${NS}" --for=condition=Succeeded --timeout=1800s
             echo "Analyzer deployed successfully."
 
     - name: deploy-ui-console
       runAfter:
-        - deploy-analyzer
+        - check-prerequisites
       taskRef:
         resolver: cluster
         params:
@@ -193,11 +233,16 @@ spec:
                   value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault,org.apache.camel.quarkus:camel-quarkus-platform-http"
               workspaces:
                 - name: shared-workspace
-                  persistentVolumeClaim:
-                    claimName: maven-repo
+                  volumeClaimTemplate:
+                    spec:
+                      accessModes:
+                        - ReadWriteOnce
+                      resources:
+                        requests:
+                          storage: 1Gi
             EOF
 
             echo "Waiting for ui-console build-and-deploy to complete..."
-            RUN=$(oc get pipelinerun -n "${NS}" -l tekton.dev/pipeline=build-and-deploy --sort-by=.metadata.creationTimestamp -o name | tail -1)
+            RUN=$(oc get pipelinerun -n "${NS}" --sort-by=.metadata.creationTimestamp -o name | grep build-ui-console | tail -1)
             oc wait "${RUN}" -n "${NS}" --for=condition=Succeeded --timeout=1800s
             echo "UI Console deployed successfully."
