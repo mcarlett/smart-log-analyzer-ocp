@@ -15,10 +15,14 @@ spec:
       type: string
       default: "com.example:camel-app:1.0.0"
       description: Maven groupId:artifactId:version for the exported project
-    - name: quarkus-version
+    - name: runtime
       type: string
-      default: "3.32.3"
-      description: Quarkus platform version for the exported project
+      default: "quarkus"
+      description: "Target runtime for the export: quarkus or spring-boot"
+    - name: runtime-version
+      type: string
+      default: ""
+      description: "Runtime platform version (Quarkus or Spring Boot version). If empty, uses the default from camel export"
     - name: export-dir
       type: string
       default: "export"
@@ -36,13 +40,24 @@ spec:
 
         EXPORT_DIR="$(workspaces.source.path)/$(params.export-dir)"
 
-        echo "Exporting Camel application from $(params.app-path) to Quarkus..."
+        RUNTIME="$(params.runtime)"
+        echo "Exporting Camel application from $(params.app-path) to ${RUNTIME}..."
         echo "Output directory: ${EXPORT_DIR}"
         echo "GAV: $(params.gav)"
 
+        EXTRA_ARGS=""
+        VERSION="$(params.runtime-version)"
+        if [ -n "${VERSION}" ]; then
+          if [ "${RUNTIME}" = "quarkus" ]; then
+            EXTRA_ARGS="--quarkus-version=${VERSION}"
+          elif [ "${RUNTIME}" = "spring-boot" ]; then
+            EXTRA_ARGS="--camel-spring-boot-version=${VERSION}"
+          fi
+        fi
+
         camel export \
-          --runtime=quarkus \
-          --quarkus-version=$(params.quarkus-version) \
+          --runtime="${RUNTIME}" \
+          ${EXTRA_ARGS} \
           --gav="$(params.gav)" \
           --fresh \
           --dir="${EXPORT_DIR}"

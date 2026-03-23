@@ -14,6 +14,10 @@ spec:
       type: string
       default: ""
       description: Path within the workspace to the app-config directory (e.g. config/resources/app-config)
+    - name: runtime
+      type: string
+      default: "quarkus"
+      description: "Target runtime: quarkus or spring-boot"
     - name: namespace
       type: string
       default: slog-analyzer
@@ -35,12 +39,20 @@ spec:
         SRC_DIR="$(workspaces.source.path)/$(params.app-path)"
         PROPS_FILE=""
 
-        # Resolve properties file: application-prod.properties > application-dev.properties > application.properties
+        RUNTIME="$(params.runtime)"
+
+        # Resolve properties file: application-prod-<runtime>.properties > application-prod.properties > application-dev.properties > application.properties
         if [ -n "${APP_CONFIG_PATH}" ]; then
-          CANDIDATE="$(workspaces.source.path)/${APP_CONFIG_PATH}/${APP_NAME}/application-prod.properties"
+          CANDIDATE="$(workspaces.source.path)/${APP_CONFIG_PATH}/${APP_NAME}/application-prod-${RUNTIME}.properties"
           if [ -f "${CANDIDATE}" ]; then
             PROPS_FILE="${CANDIDATE}"
             echo "Using ${CANDIDATE}"
+          else
+            CANDIDATE="$(workspaces.source.path)/${APP_CONFIG_PATH}/${APP_NAME}/application-prod.properties"
+            if [ -f "${CANDIDATE}" ]; then
+              PROPS_FILE="${CANDIDATE}"
+              echo "Using ${CANDIDATE}"
+            fi
           fi
         fi
 

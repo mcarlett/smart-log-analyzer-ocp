@@ -28,6 +28,14 @@ spec:
       type: string
       description: Git revision for the config repository
       default: main
+    - name: runtime
+      type: string
+      description: "Target runtime for the camel export: quarkus or spring-boot"
+      default: "quarkus"
+    - name: runtime-version
+      type: string
+      description: "Runtime platform version (Quarkus or Spring Boot version). If empty, uses the default from camel export"
+      default: ""
 
   tasks:
     - name: check-prerequisites
@@ -105,6 +113,10 @@ spec:
                   value: "$(params.config-repo-revision)"
                 - name: extensions
                   value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault"
+                - name: runtime
+                  value: "$(params.runtime)"
+                - name: runtime-version
+                  value: "$(params.runtime-version)"
               workspaces:
                 - name: shared-workspace
                   volumeClaimTemplate:
@@ -168,6 +180,10 @@ spec:
                   value: "$(params.config-repo-revision)"
                 - name: extensions
                   value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault"
+                - name: runtime
+                  value: "$(params.runtime)"
+                - name: runtime-version
+                  value: "$(params.runtime-version)"
               workspaces:
                 - name: shared-workspace
                   volumeClaimTemplate:
@@ -237,6 +253,10 @@ spec:
                   value: "ANALYZER_STORAGE_ROOT=/storage"
                 - name: expose
                   value: "true"
+                - name: runtime
+                  value: "$(params.runtime)"
+                - name: runtime-version
+                  value: "$(params.runtime-version)"
               workspaces:
                 - name: shared-workspace
                   volumeClaimTemplate:

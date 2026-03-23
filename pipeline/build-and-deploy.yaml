@@ -40,6 +40,14 @@ spec:
       type: string
       description: Git revision for the config repository
       default: main
+    - name: runtime
+      type: string
+      description: "Target runtime for the camel export: quarkus or spring-boot"
+      default: "quarkus"
+    - name: runtime-version
+      type: string
+      description: "Runtime platform version (Quarkus or Spring Boot version). If empty, uses the default from camel export"
+      default: ""
     - name: extensions
       type: string
       description: Comma-separated list of Quarkus extensions to add
@@ -154,13 +162,15 @@ spec:
           value: repo/$(params.app-path)
         - name: app-config-path
           value: config/resources/app-config
+        - name: runtime
+          value: $(params.runtime)
         - name: namespace
           value: $(params.namespace)
       workspaces:
         - name: source
           workspace: shared-workspace
 
-    # Step 3b: Export Camel application to Quarkus project
+    # Step 3b: Export Camel application to target runtime (quarkus or spring-boot)
     - name: camel-export
       runAfter:
         - fix-workspace
@@ -173,14 +183,22 @@ spec:
           value: $(params.camel-image)
         - name: gav
           value: $(params.gav)
+        - name: runtime
+          value: $(params.runtime)
+        - name: runtime-version
+          value: $(params.runtime-version)
         - name: export-dir
           value: export
       workspaces:
         - name: source
           workspace: shared-workspace
 
-    # Step 4: Add Quarkus extensions
+    # Step 4: Add Quarkus extensions (only for quarkus runtime)
     - name: add-quarkus-extension
+      when:
+        - input: "$(params.runtime)"
+          operator: in
+          values: ["quarkus"]
       runAfter:
         - camel-export
       taskRef:
@@ -197,10 +215,11 @@ spec:
           workspace: shared-workspace
           subPath: m2-settings
 
-    # Step 5: Build Quarkus application with Maven
+    # Step 5: Build application with Maven
     - name: maven-build
       runAfter:
         - add-quarkus-extension
+        - camel-export
       taskRef:
         resolver: cluster
         params:

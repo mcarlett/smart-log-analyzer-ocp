@@ -8,3 +8,7 @@ spec:
   params:
     - name: namespace
       value: slog-analyzer
+    - name: runtime
+      value: quarkus
+    - name: runtime-version
+      value: "3.32.3"
