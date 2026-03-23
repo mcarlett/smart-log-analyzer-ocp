@@ -106,13 +106,13 @@ init-workspace →                     fix-workspace →                      �
 | **git-clone-config** | `openshift-pipelines` | Clones the config repository (containing `resources/app-config/`) |
 | **fix-workspace** | Custom | Fixes permissions after git-clone for subsequent tasks |
 | **create-app-config** | Custom | Resolves properties file (`application-prod-<runtime>.properties` > `application-prod.properties` > `application-dev.properties` > `application.properties`) and creates a `<app-name>-config` ConfigMap, mounted at `/deployments/config/application.properties` in the deployment |
-| **camel-export** | Custom | Runs `camel export --runtime=<runtime>` to generate a Quarkus or Spring Boot project |
+| **camel-export** | Custom | Runs `camel export --runtime=<runtime>` to generate a Quarkus or Spring Boot project, with optional `--dep` for additional dependencies |
 | **add-quarkus-extension** | Custom | Adds Quarkus extensions (e.g. `camel-quarkus-hashicorp-vault`) to the exported project (skipped for spring-boot runtime) |
 | **fix-export-permissions** | Inline | Fixes workspace permissions after export/extensions (always runs regardless of runtime) |
 | **maven-build** | Inline | Runs `./mvnw clean package` using `ubi9/openjdk-21` to build the application |
 | **prepare-dockerfile** | Custom | Writes Dockerfile from `base-image-config-<runtime>` ConfigMap to workspace (Quarkus fast-jar or Spring Boot fat-jar layout) |
 | **buildah** | `openshift-pipelines` | Builds the container image from `src/main/docker/Dockerfile.jvm` |
-| **openshift-client** | `openshift-pipelines` | Creates the Deployment with 0 replicas, applies all configuration (env vars from `infra-endpoints`, `otel-infra-endpoints` ConfigMaps, `vault-token` and `infra-accounts` Secrets, memory limit 2Gi, volumes, optional storage PVC, extra env vars, optional Route), then scales to the desired replica count |
+| **openshift-client** | `openshift-pipelines` | Creates the Deployment with 0 replicas, applies all configuration (env vars from `infra-endpoints`, `otel-infra-endpoints` ConfigMaps, `vault-token` Secret, memory limit 2Gi, volumes, optional storage PVC, extra env vars, optional Route). For Quarkus: injects `infra-accounts` credentials as env vars and sets Netty native transport workaround. Then scales to the desired replica count |
 
 ### deploy-smart-log-analyzer
 
@@ -203,6 +203,7 @@ tkn pipeline start build-and-deploy \
 | `runtime` | `quarkus` | Target runtime for the camel export: `quarkus` or `spring-boot` |
 | `runtime-version` | _(empty)_ | Runtime platform version (Quarkus or Spring Boot). If empty, uses the default from camel export |
 | `extensions` | `org.apache.camel.quarkus:camel-quarkus-hashicorp-vault` | Comma-separated list of Quarkus extensions to add (only used with quarkus runtime) |
+| `deps` | _(empty)_ | Comma-separated list of additional dependencies to add during `camel export` via `--dep` (e.g. `org.apache.camel.springboot:camel-hashicorp-vault-starter` for Spring Boot) |
 | `storage-mount-point` | _(empty)_ | If set, creates a `<app-name>-storage` PVC and mounts it at this path |
 | `storage-size` | `1Gi` | Size of the persistent storage PVC (only used if `storage-mount-point` is set) |
 | `extra-env` | _(empty)_ | Comma-separated `key=value` pairs for extra environment variables |
@@ -287,10 +288,15 @@ The pipeline supports both **Quarkus** and **Spring Boot** runtimes. Key differe
 |---|---|---|
 | JMS connection | `camel.beans.*` (Camel bean DSL) | `spring.artemis.*` (Spring Boot auto-configuration) |
 | HTTP server | `camel-quarkus-platform-http` | `server.port` / `camel.rest.component=platform-http` |
-| Vault placeholders | `{{hashicorp:secret:key}}` | `{{hashicorp:secret:key}}` with `camel.component.hashicorp-vault.early-resolve-properties=true` |
+| Vault placeholders | `{{hashicorp:secret:key}}` | `{{hashicorp:secret:key#value}}` with `camel.component.hashicorp-vault.early-resolve-properties=true` |
+| Vault dependency | `camel-quarkus-hashicorp-vault` (Quarkus extension) | `camel-hashicorp-vault-starter` (added via `--dep` during export) |
+| Infinispan credentials | Env vars from `infra-accounts` secret (Quarkus extension can't resolve vault placeholders) | Vault placeholders with `#value` field syntax |
+| Netty workaround | `JAVA_OPTS_APPEND=-Dio.netty.transport.noNative=true` | Not needed |
 | Container image | Fast-jar layout (`quarkus-app/`) | Fat jar (`app.jar`) |
 
 Both runtimes use `camel.main.name` for the application name. Runtime-specific properties files are stored in `resources/app-config/<component>/application-prod-<runtime>.properties`.
+
+Vault KV v2 stores secrets as JSON objects (e.g. `{"value": "artemis"}`). The `#value` field selector extracts the specific field: `{{hashicorp:secret:amq-username#value}}` resolves to `artemis`. See the [Camel HashiCorp Vault documentation](https://camel.apache.org/components/4.18.x/hashicorp-vault-component.html) for the full placeholder syntax.
 
 ### Infrastructure credentials
 

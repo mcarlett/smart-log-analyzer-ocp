@@ -23,6 +23,10 @@ spec:
       type: string
       default: ""
       description: "Runtime platform version (Quarkus or Spring Boot version). If empty, uses the default from camel export"
+    - name: deps
+      type: string
+      default: ""
+      description: "Comma-separated list of additional dependencies to add via --dep"
     - name: export-dir
       type: string
       default: "export"
@@ -55,9 +59,16 @@ spec:
           fi
         fi
 
+        DEP_ARGS=""
+        DEPS="$(params.deps)"
+        if [ -n "${DEPS}" ]; then
+          DEP_ARGS="--dep=${DEPS}"
+        fi
+
         camel export \
           --runtime="${RUNTIME}" \
           ${EXTRA_ARGS} \
+          ${DEP_ARGS} \
           --gav="$(params.gav)" \
           --fresh \
           --dir="${EXPORT_DIR}"

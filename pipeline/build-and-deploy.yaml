@@ -50,8 +50,12 @@ spec:
       default: ""
     - name: extensions
       type: string
-      description: Comma-separated list of Quarkus extensions to add
+      description: Comma-separated list of Quarkus extensions to add (only used with quarkus runtime)
       default: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault"
+    - name: deps
+      type: string
+      description: "Comma-separated list of additional dependencies to add during camel export (e.g. for spring-boot starters)"
+      default: ""
     - name: storage-mount-point
       type: string
       description: "Mount point for persistent storage. If set, creates a PVC named <app-name>-storage and mounts it at this path."
@@ -187,6 +191,8 @@ spec:
           value: $(params.runtime)
         - name: runtime-version
           value: $(params.runtime-version)
+        - name: deps
+          value: $(params.deps)
         - name: export-dir
           value: export
       workspaces:
@@ -335,22 +341,25 @@ spec:
             oc set env deployment/"${APP}" -n "${NS}" \
               --from=secret/vault-token
 
-            # Workaround for Infinispan client 16.x Netty event loop incompatibility
-            # (incompatible event loop type: NioEventLoop) with Quarkus 3.32.x
-            oc set env deployment/"${APP}" -n "${NS}" \
-              JAVA_OPTS_APPEND="-Dio.netty.transport.noNative=true"
+            RUNTIME="$(params.runtime)"
+            if [ "${RUNTIME}" = "quarkus" ]; then
+              # Workaround for Infinispan client 16.x Netty event loop incompatibility
+              # (incompatible event loop type: NioEventLoop) with Quarkus 3.32.x
+              oc set env deployment/"${APP}" -n "${NS}" \
+                JAVA_OPTS_APPEND="-Dio.netty.transport.noNative=true"
 
-            # Inject Data Grid credentials for the Quarkus Infinispan client extension,
-            # which cannot resolve Camel vault placeholders (hashicorp:secret:*)
-            oc set env deployment/"${APP}" -n "${NS}" \
-              DATAGRID_USERNAME- DATAGRID_PASSWORD- AMQ_USERNAME- AMQ_PASSWORD-
+              # Inject Data Grid credentials for the Quarkus Infinispan client extension,
+              # which cannot resolve Camel vault placeholders (hashicorp:secret:*)
+              oc set env deployment/"${APP}" -n "${NS}" \
+                DATAGRID_USERNAME- DATAGRID_PASSWORD- AMQ_USERNAME- AMQ_PASSWORD-
 
-            oc patch deployment "${APP}" -n "${NS}" --type=json -p '[
-              {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"DATAGRID_USERNAME","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"datagrid-username"}}}},
-              {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"DATAGRID_PASSWORD","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"datagrid-password"}}}},
-              {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"AMQ_USERNAME","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"amq-username"}}}},
-              {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"AMQ_PASSWORD","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"amq-password"}}}}
-            ]'
+              oc patch deployment "${APP}" -n "${NS}" --type=json -p '[
+                {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"DATAGRID_USERNAME","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"datagrid-username"}}}},
+                {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"DATAGRID_PASSWORD","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"datagrid-password"}}}},
+                {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"AMQ_USERNAME","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"amq-username"}}}},
+                {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"AMQ_PASSWORD","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"amq-password"}}}}
+              ]'
+            fi
 
             # Mount app-config ConfigMap as /deployments/config/application.properties
             oc set volume deployment/"${APP}" -n "${NS}" \

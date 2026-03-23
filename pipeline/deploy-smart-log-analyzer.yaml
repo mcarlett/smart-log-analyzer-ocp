@@ -113,6 +113,8 @@ spec:
                   value: "$(params.config-repo-revision)"
                 - name: extensions
                   value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault"
+                - name: deps
+                  value: "org.apache.camel.springboot:camel-hashicorp-vault-starter"
                 - name: runtime
                   value: "$(params.runtime)"
                 - name: runtime-version
@@ -180,6 +182,8 @@ spec:
                   value: "$(params.config-repo-revision)"
                 - name: extensions
                   value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault"
+                - name: deps
+                  value: "org.apache.camel.springboot:camel-hashicorp-vault-starter"
                 - name: runtime
                   value: "$(params.runtime)"
                 - name: runtime-version
@@ -247,6 +251,8 @@ spec:
                   value: "$(params.config-repo-revision)"
                 - name: extensions
                   value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault,org.apache.camel.quarkus:camel-quarkus-platform-http"
+                - name: deps
+                  value: "org.apache.camel.springboot:camel-hashicorp-vault-starter"
                 - name: storage-mount-point
                   value: "/storage"
                 - name: extra-env
