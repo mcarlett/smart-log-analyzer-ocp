@@ -1,6 +1,6 @@
 # Smart Log Analyzer OCP
 
-Tekton pipelines for deploying infrastructure and building Apache Camel JBang applications on OpenShift. The `infra-deploy` pipeline installs the required operators and deploys AMQ Broker, Infinispan (Data Grid) with pre-configured caches, and HashiCorp Vault for secrets management. The `build-and-deploy` pipeline exports a Camel application to a Quarkus project, builds it with Maven, creates a container image with Buildah, and deploys it.
+Tekton pipelines for deploying infrastructure and building Apache Camel JBang applications on OpenShift. The `infra-deploy` pipeline installs the required operators and deploys AMQ Broker, Infinispan (Data Grid) with pre-configured caches, and HashiCorp Vault for secrets management. The `build-and-deploy` pipeline exports a Camel application to a target runtime (Quarkus or Spring Boot), builds it with Maven, creates a container image with Buildah, and deploys it.
 
 ## Project Structure
 
@@ -59,8 +59,9 @@ smart-log-analyzer-ocp/
     ├── pvc/
     │   └── maven-repo.yaml                  # PVC for persistent Maven repository cache (1Gi)
     ├── configmaps/
-    │   ├── base-image-config.yaml           # Dockerfile for building the application image
-    │   └── otel-infra-endpoints.yaml        # Endpoints for the existing OpenTelemetry infrastructure
+    │   ├── base-image-config-quarkus.yaml       # Dockerfile for Quarkus fast-jar image layout
+    │   ├── base-image-config-spring-boot.yaml   # Dockerfile for Spring Boot fat-jar image layout
+    │   └── otel-infra-endpoints.yaml            # Endpoints for the existing OpenTelemetry infrastructure
     ├── secrets/
     │   └── infra-accounts.yaml              # Infrastructure credentials (AMQ Broker, Data Grid)
     └── templates/
@@ -94,7 +95,7 @@ init-workspace → git-clone → create-operator-group → install-datagrid    �
 
 ```
                  → git-clone        ↘                → create-app-config
-init-workspace →                     fix-workspace →                      → camel-export → add-quarkus-extension (if quarkus) → maven (package) → prepare-dockerfile → buildah (build image) → deploy
+init-workspace →                     fix-workspace →                      → camel-export → add-quarkus-extension (if quarkus) → fix-export-permissions → maven-build → prepare-dockerfile → buildah (build image) → deploy
                  → git-clone-config ↗
 ```
 
@@ -107,8 +108,9 @@ init-workspace →                     fix-workspace →                      �
 | **create-app-config** | Custom | Resolves properties file (`application-prod-<runtime>.properties` > `application-prod.properties` > `application-dev.properties` > `application.properties`) and creates a `<app-name>-config` ConfigMap, mounted at `/deployments/config/application.properties` in the deployment |
 | **camel-export** | Custom | Runs `camel export --runtime=<runtime>` to generate a Quarkus or Spring Boot project |
 | **add-quarkus-extension** | Custom | Adds Quarkus extensions (e.g. `camel-quarkus-hashicorp-vault`) to the exported project (skipped for spring-boot runtime) |
-| **maven** | `openshift-pipelines` | Runs `./mvnw clean package` to build the Quarkus application, uses a persistent `maven-repo` PVC (1Gi) to cache dependencies across builds |
-| **prepare-dockerfile** | Custom | Writes Dockerfile from `base-image-config` ConfigMap to workspace |
+| **fix-export-permissions** | Inline | Fixes workspace permissions after export/extensions (always runs regardless of runtime) |
+| **maven-build** | Inline | Runs `./mvnw clean package` using `ubi9/openjdk-21` to build the application |
+| **prepare-dockerfile** | Custom | Writes Dockerfile from `base-image-config-<runtime>` ConfigMap to workspace (Quarkus fast-jar or Spring Boot fat-jar layout) |
 | **buildah** | `openshift-pipelines` | Builds the container image from `src/main/docker/Dockerfile.jvm` |
 | **openshift-client** | `openshift-pipelines` | Creates the Deployment with 0 replicas, applies all configuration (env vars from `infra-endpoints`, `otel-infra-endpoints` ConfigMaps, `vault-token` and `infra-accounts` Secrets, memory limit 2Gi, volumes, optional storage PVC, extra env vars, optional Route), then scales to the desired replica count |
 
@@ -259,7 +261,7 @@ The Vault deployment tasks (`generate-vault-token`, `install-vault`, `configure-
 
 ### Maven repository cache
 
-The `build-and-deploy` pipeline uses a persistent `maven-repo` PVC (1Gi, defined in `resources/pvc/maven-repo.yaml`) to cache Maven dependencies across pipeline runs. The PVC is mounted via `subPath: m2-settings` on the `shared-workspace` to both the `add-quarkus-extension` and `maven` tasks, avoiding repeated downloads and speeding up subsequent builds.
+The `build-and-deploy` pipeline uses a persistent `maven-repo` PVC (1Gi, defined in `resources/pvc/maven-repo.yaml`) to cache Maven dependencies across pipeline runs. The PVC is mounted via `subPath: m2-settings` on the `shared-workspace` to both the `add-quarkus-extension` and `maven-build` steps, avoiding repeated downloads and speeding up subsequent builds.
 
 ### Kafka TLS
 
@@ -276,6 +278,19 @@ oc create secret generic kafka-cluster-ca --from-file=ca.crt=/tmp/ca.crt -n slog
 ```
 
 Alternatively, edit the template at `resources/templates/kafka-cluster-ca.yaml` with the PEM-encoded CA certificate and apply it manually with `oc apply -f resources/templates/kafka-cluster-ca.yaml`.
+
+### Runtime differences
+
+The pipeline supports both **Quarkus** and **Spring Boot** runtimes. Key differences in the application configuration:
+
+| Feature | Quarkus | Spring Boot |
+|---|---|---|
+| JMS connection | `camel.beans.*` (Camel bean DSL) | `spring.artemis.*` (Spring Boot auto-configuration) |
+| HTTP server | `camel-quarkus-platform-http` | `server.port` / `camel.rest.component=platform-http` |
+| Vault placeholders | `{{hashicorp:secret:key}}` | `{{hashicorp:secret:key}}` with `camel.component.hashicorp-vault.early-resolve-properties=true` |
+| Container image | Fast-jar layout (`quarkus-app/`) | Fat jar (`app.jar`) |
+
+Both runtimes use `camel.main.name` for the application name. Runtime-specific properties files are stored in `resources/app-config/<component>/application-prod-<runtime>.properties`.
 
 ### Infrastructure credentials
 

@@ -215,34 +215,47 @@ spec:
           workspace: shared-workspace
           subPath: m2-settings
 
-    # Step 5: Build application with Maven
-    - name: maven-build
+    # Step 4b: Fix workspace permissions after export/extensions
+    - name: fix-export-permissions
       runAfter:
         - add-quarkus-extension
         - camel-export
-      taskRef:
-        resolver: cluster
-        params:
-          - name: kind
-            value: task
-          - name: name
-            value: maven
-          - name: namespace
-            value: openshift-pipelines
-      params:
-        - name: GOALS
-          value:
-            - -Dmaven.repo.local=/workspace/maven_settings/repository
-            - clean
-            - package
-        - name: SUBDIRECTORY
-          value: export
       workspaces:
         - name: source
           workspace: shared-workspace
-        - name: maven_settings
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: fix-permissions
+            image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+            securityContext:
+              runAsUser: 0
+            script: |
+              #!/usr/bin/env bash
+              chown -R 65532:0 $(workspaces.source.path)/export
+              chown -R 65532:0 $(workspaces.source.path)/m2-settings 2>/dev/null || true
+
+    # Step 5: Build application with Maven
+    - name: maven-build
+      runAfter:
+        - fix-export-permissions
+      workspaces:
+        - name: source
           workspace: shared-workspace
-          subPath: m2-settings
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: maven-goals
+            image: registry.access.redhat.com/ubi9/openjdk-21:latest
+            workingDir: $(workspaces.source.path)/export
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              ./mvnw -Dmaven.repo.local=$(workspaces.source.path)/m2-settings/repository clean package
+            securityContext:
+              runAsUser: 0
 
     # Step 5: Write Dockerfile from ConfigMap to workspace
     - name: prepare-dockerfile
@@ -253,6 +266,8 @@ spec:
       params:
         - name: export-dir
           value: export
+        - name: runtime
+          value: $(params.runtime)
       workspaces:
         - name: source
           workspace: shared-workspace

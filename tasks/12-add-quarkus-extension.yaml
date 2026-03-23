@@ -33,7 +33,3 @@ spec:
           -Dextensions="$(params.extensions)" \
           -Dmaven.repo.local="$(workspaces.maven-repo.path)/repository"
         echo "Extensions added successfully."
-
-        # Fix ownership so subsequent tasks (maven) can write to workspace
-        chown -R 65532:0 "$(workspaces.source.path)/$(params.export-dir)"
-        chown -R 65532:0 "$(workspaces.maven-repo.path)/repository"

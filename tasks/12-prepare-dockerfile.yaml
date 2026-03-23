@@ -12,28 +12,28 @@ spec:
       type: string
       default: src/main/docker/Dockerfile.jvm
       description: Destination path for the Dockerfile relative to export-dir
+    - name: runtime
+      type: string
+      default: "quarkus"
+      description: "Target runtime: quarkus or spring-boot"
   workspaces:
     - name: source
       description: Workspace containing the exported project
   steps:
     - name: write-dockerfile
-      image: registry.access.redhat.com/ubi9/ubi-minimal:latest
-      volumeMounts:
-        - name: base-image-config
-          mountPath: /config
+      image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
 
+        RUNTIME="$(params.runtime)"
+        CONFIG_MAP="base-image-config-${RUNTIME}"
         DEST="$(workspaces.source.path)/$(params.export-dir)/$(params.dockerfile-path)"
+
         mkdir -p "$(dirname "${DEST}")"
-        cp /config/Dockerfile "${DEST}"
+
+        echo "Loading Dockerfile from ConfigMap ${CONFIG_MAP}..."
+        oc get configmap "${CONFIG_MAP}" -o jsonpath='{.data.Dockerfile}' > "${DEST}"
+
         echo "Dockerfile written to ${DEST}"
         cat "${DEST}"
-  stepTemplate:
-    volumeMounts: []
-  sidecars: []
-  volumes:
-    - name: base-image-config
-      configMap:
-        name: base-image-config
