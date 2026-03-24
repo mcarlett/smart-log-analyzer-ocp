@@ -72,27 +72,8 @@ spec:
         fi
 
         echo "Creating ConfigMap ${APP_NAME}-config in namespace ${NS}..."
-
-        # Collect all files to include: main properties file + any extra files in app-config dir
-        FROM_FILE_ARGS="--from-file=application.properties=${PROPS_FILE}"
-        if [ -n "${APP_CONFIG_PATH}" ]; then
-          APP_CONFIG_DIR="$(workspaces.source.path)/${APP_CONFIG_PATH}/${APP_NAME}"
-          for EXTRA_FILE in "${APP_CONFIG_DIR}"/*; do
-            [ -f "${EXTRA_FILE}" ] || continue
-            BASENAME=$(basename "${EXTRA_FILE}")
-            # Skip the file already included as application.properties
-            [ "${EXTRA_FILE}" = "${PROPS_FILE}" ] && continue
-            # Skip properties files for other runtimes
-            case "${BASENAME}" in
-              application-prod-*.properties) continue ;;
-            esac
-            echo "Including extra file: ${BASENAME}"
-            FROM_FILE_ARGS="${FROM_FILE_ARGS} --from-file=${BASENAME}=${EXTRA_FILE}"
-          done
-        fi
-
-        eval oc create configmap "${APP_NAME}-config" \
-          ${FROM_FILE_ARGS} \
+        oc create configmap "${APP_NAME}-config" \
+          --from-file=application.properties="${PROPS_FILE}" \
           -n "${NS}" \
           --dry-run=client -o yaml | oc apply -n "${NS}" -f -
 
