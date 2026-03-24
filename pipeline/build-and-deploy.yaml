@@ -72,6 +72,10 @@ spec:
       type: string
       description: Number of replicas for the deployment
       default: "1"
+    - name: deployment-strategy
+      type: string
+      description: "Deployment strategy: RollingUpdate or Recreate"
+      default: "RollingUpdate"
     - name: expose
       type: string
       description: "If true, creates a Route to expose the deployment externally"
@@ -347,19 +351,18 @@ spec:
               # (incompatible event loop type: NioEventLoop) with Quarkus 3.32.x
               oc set env deployment/"${APP}" -n "${NS}" \
                 JAVA_OPTS_APPEND="-Dio.netty.transport.noNative=true"
-
-              # Inject Data Grid credentials for the Quarkus Infinispan client extension,
-              # which cannot resolve Camel vault placeholders (hashicorp:secret:*)
-              oc set env deployment/"${APP}" -n "${NS}" \
-                DATAGRID_USERNAME- DATAGRID_PASSWORD- AMQ_USERNAME- AMQ_PASSWORD-
-
-              oc patch deployment "${APP}" -n "${NS}" --type=json -p '[
-                {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"DATAGRID_USERNAME","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"datagrid-username"}}}},
-                {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"DATAGRID_PASSWORD","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"datagrid-password"}}}},
-                {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"AMQ_USERNAME","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"amq-username"}}}},
-                {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"AMQ_PASSWORD","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"amq-password"}}}}
-              ]'
             fi
+
+            # Inject infra-accounts credentials as env vars
+            oc set env deployment/"${APP}" -n "${NS}" \
+              DATAGRID_USERNAME- DATAGRID_PASSWORD- AMQ_USERNAME- AMQ_PASSWORD-
+
+            oc patch deployment "${APP}" -n "${NS}" --type=json -p '[
+              {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"DATAGRID_USERNAME","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"datagrid-username"}}}},
+              {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"DATAGRID_PASSWORD","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"datagrid-password"}}}},
+              {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"AMQ_USERNAME","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"amq-username"}}}},
+              {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"AMQ_PASSWORD","valueFrom":{"secretKeyRef":{"name":"infra-accounts","key":"amq-password"}}}}
+            ]'
 
             # Mount app-config ConfigMap as /deployments/config/application.properties
             oc set volume deployment/"${APP}" -n "${NS}" \
@@ -422,6 +425,14 @@ spec:
               oc expose svc/"${APP}" -n "${NS}"
               ROUTE_HOST=$(oc get route "${APP}" -n "${NS}" -o jsonpath='{.spec.host}')
               echo "Route created: http://${ROUTE_HOST}"
+            fi
+
+            # Set deployment strategy
+            STRATEGY="$(params.deployment-strategy)"
+            if [ "${STRATEGY}" = "Recreate" ]; then
+              oc patch deployment "${APP}" -n "${NS}" --type=json -p '[
+                {"op":"replace","path":"/spec/strategy","value":{"type":"Recreate"}}
+              ]'
             fi
 
             # Scale up and wait for rollout

@@ -259,6 +259,8 @@ spec:
                   value: "ANALYZER_STORAGE_ROOT=/storage"
                 - name: expose
                   value: "true"
+                - name: deployment-strategy
+                  value: "Recreate"
                 - name: runtime
                   value: "$(params.runtime)"
                 - name: runtime-version
