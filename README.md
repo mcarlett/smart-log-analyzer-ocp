@@ -48,10 +48,7 @@ smart-log-analyzer-ocp/
     │   ├── analyzer/
     │   │   ├── application-prod-quarkus.properties      # Production config for Quarkus runtime
     │   │   └── application-prod-spring-boot.properties  # Production config for Spring Boot runtime
-    │   ├── ui-console/
-    │   │   ├── application-prod-quarkus.properties      # Production config for Quarkus runtime
-    │   │   └── application-prod-spring-boot.properties  # Production config for Spring Boot runtime
-    │   └── log-generator/
+    │   └── ui-console/
     │       ├── application-prod-quarkus.properties      # Production config for Quarkus runtime
     │       └── application-prod-spring-boot.properties  # Production config for Spring Boot runtime
     ├── vault/
@@ -72,10 +69,13 @@ smart-log-analyzer-ocp/
 
 ### infra-deploy
 
-```
-                              → generate-vault-token → install-vault → configure-vault         ↘
-init-workspace → git-clone → create-operator-group → install-datagrid    → deploy-infinispan  → create-infra-endpoints
-                                                    → install-amq-broker → deploy-amq-broker  ↗
+```mermaid
+graph LR
+    init-workspace --> git-clone
+    git-clone --> create-operator-group
+    create-operator-group --> generate-vault-token --> install-vault --> configure-vault --> create-infra-endpoints
+    create-operator-group --> install-datagrid --> deploy-infinispan --> create-infra-endpoints
+    create-operator-group --> install-amq-broker --> deploy-amq-broker --> create-infra-endpoints
 ```
 
 | Task | Source | Description |
@@ -93,10 +93,16 @@ init-workspace → git-clone → create-operator-group → install-datagrid    �
 
 ### build-and-deploy
 
-```
-                 → git-clone        ↘                → create-app-config
-init-workspace →                     fix-workspace →                      → camel-export → add-quarkus-extension (if quarkus) → fix-export-permissions → maven-build → prepare-dockerfile → buildah (build image) → deploy
-                 → git-clone-config ↗
+```mermaid
+graph LR
+    init-workspace --> git-clone --> fix-workspace
+    init-workspace --> git-clone-config --> fix-workspace
+    fix-workspace --> create-app-config
+    fix-workspace --> camel-export --> add-quarkus-extension["add-quarkus-extension
+    (if quarkus)"] --> fix-export-permissions
+    camel-export --> fix-export-permissions
+    fix-export-permissions --> maven-build --> prepare-dockerfile --> buildah["buildah
+    (build image)"] --> deploy
 ```
 
 | Task | Source | Description |
@@ -112,14 +118,18 @@ init-workspace →                     fix-workspace →                      �
 | **maven-build** | Inline | Runs `./mvnw clean package` using `ubi9/openjdk-21` to build the application |
 | **prepare-dockerfile** | Custom | Writes Dockerfile from `base-image-config-<runtime>` ConfigMap to workspace (Quarkus fast-jar or Spring Boot fat-jar layout) |
 | **buildah** | `openshift-pipelines` | Builds the container image from `src/main/docker/Dockerfile.jvm` |
-| **openshift-client** | `openshift-pipelines` | Creates the Deployment with 0 replicas, applies all configuration (env vars from `infra-endpoints`, `otel-infra-endpoints` ConfigMaps, `vault-token` Secret, memory limit 2Gi, volumes, optional storage PVC, extra env vars, optional Route). For Quarkus: injects `infra-accounts` credentials as env vars and sets Netty native transport workaround. Then scales to the desired replica count |
+| **openshift-client** | `openshift-pipelines` | Creates the Deployment with 0 replicas, applies all configuration (env vars from `infra-endpoints`, `otel-infra-endpoints` ConfigMaps, `vault-token` Secret, `infra-accounts` credentials, memory limit 2Gi, volumes, optional storage PVC, extra env vars, optional Route, optional Recreate strategy). For Quarkus: sets Netty native transport workaround. Then scales to the desired replica count |
 
 ### deploy-smart-log-analyzer
 
-```
-                          → deploy-correlator  (build-and-deploy with extensions: hashicorp-vault)
-check-prerequisites  →    → deploy-analyzer    (build-and-deploy with extensions: hashicorp-vault)
-                          → deploy-ui-console  (build-and-deploy with extensions: hashicorp-vault, platform-http)
+```mermaid
+graph LR
+    check-prerequisites --> deploy-correlator["deploy-correlator
+    (hashicorp-vault)"]
+    check-prerequisites --> deploy-analyzer["deploy-analyzer
+    (hashicorp-vault)"]
+    check-prerequisites --> deploy-ui-console["deploy-ui-console
+    (hashicorp-vault, platform-http)"]
 ```
 
 | Task | Source | Description |
@@ -127,14 +137,23 @@ check-prerequisites  →    → deploy-analyzer    (build-and-deploy with extens
 | **check-prerequisites** | `openshift-pipelines` | Validates that the `kafka-cluster-ca` secret exists before proceeding |
 | **deploy-correlator** | `openshift-pipelines` | Triggers a `build-and-deploy` PipelineRun for the correlator component and waits for completion |
 | **deploy-analyzer** | `openshift-pipelines` | Triggers a `build-and-deploy` PipelineRun for the analyzer component and waits for completion |
-| **deploy-ui-console** | `openshift-pipelines` | Triggers a `build-and-deploy` PipelineRun for the ui-console component (with `camel-quarkus-platform-http`, persistent storage at `/storage`, `ANALYZER_STORAGE_ROOT=/storage`, `expose=true`) and waits for completion. The created Route allows external access to the UI |
+| **deploy-ui-console** | `openshift-pipelines` | Triggers a `build-and-deploy` PipelineRun for the ui-console component (with `camel-quarkus-platform-http`, persistent storage at `/storage`, `ANALYZER_STORAGE_ROOT=/storage`, `expose=true`, `Recreate` strategy) and waits for completion. The created Route allows external access to the UI |
 
 ## Prerequisites
 
 - OpenShift 4 cluster
-- Red Hat OpenShift Pipelines operator installed
+- Red Hat OpenShift Pipelines operator installed (provides `git-clone`, `buildah`, `openshift-client`, `helm-upgrade-from-repo` ClusterTasks)
 - Tekton CLI (`tkn`) (optional, for monitoring runs)
 - Kafka cluster CA certificate: populate `resources/secrets/kafka-cluster-ca.yaml` with the CA certificate (PEM format) of the external Kafka cluster used for OpenTelemetry data
+
+The following operators are installed automatically by the `infra-deploy` pipeline:
+
+| Operator | Channel | Description |
+|---|---|---|
+| `datagrid` | `stable` | Red Hat Data Grid (Infinispan) operator |
+| `amq-broker-rhel9` | `7.13.x` | Red Hat AMQ Broker operator |
+
+HashiCorp Vault is installed via the [Helm chart](https://helm.releases.hashicorp.com) (`hashicorp/vault`) in dev mode, not as an operator.
 
 ## Usage
 
@@ -208,6 +227,7 @@ tkn pipeline start build-and-deploy \
 | `storage-size` | `1Gi` | Size of the persistent storage PVC (only used if `storage-mount-point` is set) |
 | `extra-env` | _(empty)_ | Comma-separated `key=value` pairs for extra environment variables |
 | `replicas` | `1` | Number of replicas for the deployment |
+| `deployment-strategy` | `RollingUpdate` | Deployment strategy: `RollingUpdate` or `Recreate` |
 | `expose` | `false` | If `true`, creates a Service and Route to expose the deployment externally |
 
 ### deploy-smart-log-analyzer parameters
@@ -290,7 +310,8 @@ The pipeline supports both **Quarkus** and **Spring Boot** runtimes. Key differe
 | HTTP server | `camel-quarkus-platform-http` | `server.port` / `camel.rest.component=platform-http` |
 | Vault placeholders | `{{hashicorp:secret:key}}` | `{{hashicorp:secret:key#value}}` with `camel.component.hashicorp-vault.early-resolve-properties=true` |
 | Vault dependency | `camel-quarkus-hashicorp-vault` (Quarkus extension) | `camel-hashicorp-vault-starter` (added via `--dep` during export) |
-| Infinispan credentials | Env vars from `infra-accounts` secret (Quarkus extension can't resolve vault placeholders) | Vault placeholders with `#value` field syntax |
+| Infinispan credentials | Env vars from `infra-accounts` secret | Env vars from `infra-accounts` secret |
+| Infinispan TLS | Handled by Quarkus extension | `camel.component.infinispan.configuration-properties[...]` with Hot Rod `use_ssl`, `trust_store_file_name`, `trust_store_type`, `sni_host_name` |
 | Netty workaround | `JAVA_OPTS_APPEND=-Dio.netty.transport.noNative=true` | Not needed |
 | Container image | Fast-jar layout (`quarkus-app/`) | Fat jar (`app.jar`) |
 
@@ -308,6 +329,39 @@ The `infra-accounts` secret is defined in `resources/secrets/infra-accounts.yaml
 | `amq-password` | `artemis` | AMQ Broker admin password |
 | `datagrid-username` | `admin` | Infinispan/Data Grid admin username |
 | `datagrid-password` | `password` | Infinispan/Data Grid admin password |
+
+## Generated Secrets and ConfigMaps
+
+The pipelines create several Secrets and ConfigMaps at runtime. The following tables summarize what is pre-applied from files and what is generated by the pipeline tasks.
+
+### Pre-applied (from `resources/`)
+
+| Name | Kind | Source | Description |
+|---|---|---|---|
+| `infra-accounts` | Secret | `resources/secrets/infra-accounts.yaml` | Infrastructure credentials (AMQ Broker, Data Grid) |
+| `base-image-config-quarkus` | ConfigMap | `resources/configmaps/base-image-config-quarkus.yaml` | Dockerfile template for Quarkus fast-jar layout |
+| `base-image-config-spring-boot` | ConfigMap | `resources/configmaps/base-image-config-spring-boot.yaml` | Dockerfile template for Spring Boot fat-jar layout |
+| `otel-infra-endpoints` | ConfigMap | `resources/configmaps/otel-infra-endpoints.yaml` | External OpenTelemetry infrastructure endpoints (`KAFKA_BROKERS`) |
+
+### Generated by `infra-deploy`
+
+| Name | Kind | Created by | Description |
+|---|---|---|---|
+| `infinispan-credentials` | Secret | `deploy-infinispan` | Credentials for the Infinispan cluster (from `infra-accounts`) |
+| `vault-token` | Secret | `configure-vault` | Contains `HASHICORP_TOKEN` for application access to Vault |
+| `infra-endpoints` | ConfigMap | `create-infra-endpoints` | Service URLs for AMQ Broker, Infinispan, and Vault |
+
+### Generated by `build-and-deploy`
+
+| Name | Kind | Created by | Description |
+|---|---|---|---|
+| `<app-name>-config` | ConfigMap | `create-app-config` | Application properties mounted at `/deployments/config/application.properties` |
+
+### Manual prerequisite
+
+| Name | Kind | Description |
+|---|---|---|
+| `kafka-cluster-ca` | Secret | Strimzi Kafka cluster CA certificate, mounted at `/etc/kafka-ca/ca.crt` (see [Kafka TLS](#kafka-tls)) |
 
 ## Cleanup
 
