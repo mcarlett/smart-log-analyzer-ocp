@@ -306,12 +306,13 @@ The pipeline supports both **Quarkus** and **Spring Boot** runtimes. Key differe
 
 | Feature | Quarkus | Spring Boot |
 |---|---|---|
-| JMS connection | `camel.beans.*` (Camel bean DSL) | `spring.artemis.*` (Spring Boot auto-configuration) |
+| JMS connection | `camel.beans.*` (Camel bean DSL) with `${AMQ_USERNAME}` env vars | `spring.artemis.*` (Spring Boot auto-configuration) with `{{hashicorp:secret:amq-username#value}}` vault placeholders |
+| JMS credentials | Env vars from `infra-accounts` secret (vault placeholders don't work in `camel.beans.*`) | Vault placeholders with `#value` field syntax |
 | HTTP server | `camel-quarkus-platform-http` | `server.port` / `camel.rest.component=platform-http` |
-| Vault placeholders | `{{hashicorp:secret:key}}` | `{{hashicorp:secret:key#value}}` with `camel.component.hashicorp-vault.early-resolve-properties=true` |
+| Vault placeholders | `hashicorp:secret:key` (no `{{}}` or `#value` needed) | `{{hashicorp:secret:key#value}}` with `camel.component.hashicorp-vault.early-resolve-properties=true` |
 | Vault dependency | `camel-quarkus-hashicorp-vault` (Quarkus extension) | `camel-hashicorp-vault-starter` (added via `--dep` during export) |
-| Infinispan credentials | Env vars from `infra-accounts` secret | Env vars from `infra-accounts` secret |
-| Infinispan TLS | Handled by Quarkus extension | `camel.component.infinispan.configuration-properties[...]` with Hot Rod `use_ssl`, `trust_store_file_name`, `trust_store_type`, `sni_host_name` |
+| Infinispan credentials | Camel component: vault placeholders; Quarkus client: `${DATAGRID_USERNAME}` env vars | Vault placeholders with `#value` field syntax |
+| Infinispan TLS | `quarkus.infinispan-client.trust-store*` / `sni-host-name` | `camel.component.infinispan.configuration-properties[...]` with Hot Rod `use_ssl`, `trust_store_file_name`, `trust_store_type`, `sni_host_name` |
 | Netty workaround | `JAVA_OPTS_APPEND=-Dio.netty.transport.noNative=true` | Not needed |
 | Container image | Fast-jar layout (`quarkus-app/`) | Fat jar (`app.jar`) |
 
