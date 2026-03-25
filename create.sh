@@ -47,8 +47,15 @@ echo "Creating kafka-cluster-ca secret..."
 oc get secret camel-cluster-cluster-ca-cert -n "${KAFKA_NAMESPACE}" -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/ca.crt
 oc create secret generic kafka-cluster-ca --from-file=ca.crt=/tmp/ca.crt -n "${NAMESPACE}"
 
-echo "Deploying all components with ${RUNTIME} runtime..."
-oc create -f "pipelinerun/deploy-smart-log-analyzer-${RUNTIME}-run.yaml"
+echo "Applying openai-config secret..."
+oc apply -f resources/templates/openai-config.yaml -n "${NAMESPACE}"
 
-echo "Following deploy logs..."
-tkn pipelinerun logs -f -L
+echo "Setting up GitOps polling (CronJob)..."
+oc apply -f triggers/cronjob-poll.yaml -n "${NAMESPACE}"
+
+echo ""
+echo "Infrastructure deployed. Application builds will be triggered automatically"
+echo "by the CronJob polling the source repository every 5 minutes."
+echo ""
+echo "To trigger a manual build:"
+echo "  tkn pipeline start build -p app-name=correlator -p app-path=smart-log-analyzer/correlator -p gav=com.example:correlator:1.0.0 -p runtime=${RUNTIME} -w name=shared-workspace,volumeClaimTemplateFile=pipelinerun/build-run.yaml"

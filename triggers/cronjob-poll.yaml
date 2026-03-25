@@ -19,21 +19,23 @@ spec:
               image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
               env:
                 - name: GITHUB_OWNER
-                  value: "mcarlett"
+                  value: "loop9x"
                 - name: GITHUB_REPO
-                  value: "camel-jbang-examples"
+                  value: "smart-log-analyzer"
                 - name: BRANCH
-                  value: "tekton"
+                  value: "main"
                 - name: REPO_URL
-                  value: "https://github.com/mcarlett/camel-jbang-examples.git"
+                  value: "https://github.com/loop9x/smart-log-analyzer.git"
+                - name: APP_ROOT
+                  value: ""
                 - name: RUNTIME
                   value: "spring-boot"
+                - name: CAMEL_IMAGE
+                  value: "quay.io/mcarlett/camel-launcher:4.18.0"
                 - name: CONFIG_REPO_URL
                   value: "https://github.com/mcarlett/smart-log-analyzer-ocp.git"
                 - name: CONFIG_REPO_REVISION
-                  value: "main"
-                - name: CAMEL_IMAGE
-                  value: "quay.io/mcarlett/camel-launcher:4.18.0"
+                  value: "gitops"
               command:
                 - /bin/bash
                 - -c
@@ -42,6 +44,22 @@ spec:
 
                   NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
                   API="https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}"
+
+                  # Build path prefix from APP_ROOT (e.g. "smart-log-analyzer/" or "")
+                  if [ -n "${APP_ROOT}" ]; then
+                    PATH_PREFIX="${APP_ROOT}/"
+                  else
+                    PATH_PREFIX=""
+                  fi
+
+                  # Check if any application deployments are missing
+                  DEPLOY_MISSING=false
+                  for app in correlator analyzer ui-console; do
+                    if ! oc get deployment "${app}" -n "${NS}" &>/dev/null; then
+                      echo "Deployment '${app}' not found."
+                      DEPLOY_MISSING=true
+                    fi
+                  done
 
                   # Get the last known commit from the ConfigMap (or empty if first run)
                   LAST_SHA=$(oc get configmap source-repo-state -n "${NS}" -o jsonpath='{.data.last-commit}' 2>/dev/null || echo "")
@@ -52,39 +70,38 @@ spec:
                   echo "Last known commit: ${LAST_SHA:-<first run>}"
                   echo "Current HEAD:      ${CURRENT_SHA}"
 
-                  if [ "${LAST_SHA}" = "${CURRENT_SHA}" ]; then
-                    echo "No new commits. Nothing to do."
-                    exit 0
-                  fi
-
-                  # Determine changed files using GitHub Compare API
+                  # Determine which components need building
                   BUILD_CORRELATOR=false
                   BUILD_ANALYZER=false
                   BUILD_UI_CONSOLE=false
 
-                  if [ -z "${LAST_SHA}" ]; then
-                    echo "First run — skipping build, storing current SHA."
-                    oc create configmap source-repo-state --from-literal=last-commit="${CURRENT_SHA}" -n "${NS}" --dry-run=client -o yaml | oc apply -n "${NS}" -f -
+                  if [ "${DEPLOY_MISSING}" = "true" ]; then
+                    echo "Deployments missing — building all components."
+                    BUILD_CORRELATOR=true
+                    BUILD_ANALYZER=true
+                    BUILD_UI_CONSOLE=true
+                  elif [ "${LAST_SHA}" = "${CURRENT_SHA}" ]; then
+                    echo "No new commits. Nothing to do."
                     exit 0
+                  else
+                    echo "Fetching diff ${LAST_SHA}...${CURRENT_SHA}..."
+                    CHANGED_FILES=$(curl -sf "${API}/compare/${LAST_SHA}...${CURRENT_SHA}" | python3 -c "
+                    import sys, json
+                    data = json.load(sys.stdin)
+                    for f in data.get('files', []):
+                        print(f['filename'])
+                    ")
+
+                    echo "Changed files:"
+                    echo "${CHANGED_FILES}"
+
+                    echo "${CHANGED_FILES}" | grep -q "^${PATH_PREFIX}correlator/" && BUILD_CORRELATOR=true || true
+                    echo "${CHANGED_FILES}" | grep -q "^${PATH_PREFIX}analyzer/" && BUILD_ANALYZER=true || true
+                    echo "${CHANGED_FILES}" | grep -q "^${PATH_PREFIX}ui-console/" && BUILD_UI_CONSOLE=true || true
                   fi
 
-                  echo "Fetching diff ${LAST_SHA}...${CURRENT_SHA}..."
-                  CHANGED_FILES=$(curl -sf "${API}/compare/${LAST_SHA}...${CURRENT_SHA}" | python3 -c "
-                  import sys, json
-                  data = json.load(sys.stdin)
-                  for f in data.get('files', []):
-                      print(f['filename'])
-                  ")
-
-                  echo "Changed files:"
-                  echo "${CHANGED_FILES}"
-
-                  echo "${CHANGED_FILES}" | grep -q '^smart-log-analyzer/correlator/' && BUILD_CORRELATOR=true || true
-                  echo "${CHANGED_FILES}" | grep -q '^smart-log-analyzer/analyzer/' && BUILD_ANALYZER=true || true
-                  echo "${CHANGED_FILES}" | grep -q '^smart-log-analyzer/ui-console/' && BUILD_UI_CONSOLE=true || true
-
                   echo ""
-                  echo "Components to rebuild: correlator=${BUILD_CORRELATOR} analyzer=${BUILD_ANALYZER} ui-console=${BUILD_UI_CONSOLE}"
+                  echo "Components to build: correlator=${BUILD_CORRELATOR} analyzer=${BUILD_ANALYZER} ui-console=${BUILD_UI_CONSOLE}"
 
                   if [ "${BUILD_CORRELATOR}" = "false" ] && [ "${BUILD_ANALYZER}" = "false" ] && [ "${BUILD_UI_CONSOLE}" = "false" ]; then
                     echo "No smart-log-analyzer components changed."
@@ -108,7 +125,7 @@ spec:
                     namespace: ${NS}
                   spec:
                     pipelineRef:
-                      name: build-and-deploy
+                      name: build
                     params:
                       - name: repo-url
                         value: "${REPO_URL}"
@@ -124,14 +141,6 @@ spec:
                         value: "${CAMEL_IMAGE}"
                       - name: gav
                         value: "${GAV}"
-                      - name: config-repo-url
-                        value: "${CONFIG_REPO_URL}"
-                      - name: config-repo-revision
-                        value: "${CONFIG_REPO_REVISION}"
-                      - name: extensions
-                        value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault"
-                      - name: deps
-                        value: "org.apache.camel.springboot:camel-hashicorp-vault-starter"
                       - name: runtime
                         value: "${RUNTIME}"
                   ${EXTRA_PARAMS}
@@ -148,27 +157,57 @@ spec:
                   }
 
                   if [ "${BUILD_CORRELATOR}" = "true" ]; then
-                    create_pipeline_run "correlator" "smart-log-analyzer/correlator" "com.example:correlator:1.0.0"
+                    create_pipeline_run "correlator" "${PATH_PREFIX}correlator" "com.example:correlator:1.0.0"
                   fi
 
                   if [ "${BUILD_ANALYZER}" = "true" ]; then
-                    ANALYZER_EXTRA='                      - name: env-secret
-                        value: "openai-config"'
-                    create_pipeline_run "analyzer" "smart-log-analyzer/analyzer" "com.example:analyzer:1.0.0" "${ANALYZER_EXTRA}"
+                    create_pipeline_run "analyzer" "${PATH_PREFIX}analyzer" "com.example:analyzer:1.0.0"
                   fi
 
                   if [ "${BUILD_UI_CONSOLE}" = "true" ]; then
-                    UI_EXTRA='                      - name: storage-mount-point
-                        value: "/storage"
-                      - name: extra-env
-                        value: "ANALYZER_STORAGE_ROOT=/storage"
-                      - name: expose
-                        value: "true"
-                      - name: deployment-strategy
-                        value: "Recreate"
-                      - name: extensions
-                        value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault,org.apache.camel.quarkus:camel-quarkus-platform-http"'
-                    create_pipeline_run "ui-console" "smart-log-analyzer/ui-console" "com.example:ui-console:1.0.0" "${UI_EXTRA}"
+                    UI_EXTRA='                      - name: extensions
+                        value: "org.apache.camel.quarkus:camel-quarkus-platform-http"'
+                    create_pipeline_run "ui-console" "${PATH_PREFIX}ui-console" "com.example:ui-console:1.0.0" "${UI_EXTRA}"
+                  fi
+
+                  # Deploy applications via ArgoCD if deployments are missing
+                  if [ "${DEPLOY_MISSING}" = "true" ]; then
+                    echo "Waiting for build PipelineRuns to complete..."
+                    for app in correlator analyzer ui-console; do
+                      PR=$(oc get pipelinerun -n "${NS}" -l tekton.dev/pipeline=build \
+                        --sort-by=.metadata.creationTimestamp -o name 2>/dev/null \
+                        | grep "build-${app}" | tail -1)
+                      if [ -n "${PR}" ]; then
+                        echo "Waiting for ${PR}..."
+                        oc wait "${PR}" -n "${NS}" --for=condition=Succeeded --timeout=600s || true
+                      fi
+                    done
+
+                    echo "Applying ArgoCD Application to deploy via Helm chart..."
+                    cat <<ARGOEOF | oc apply -f -
+                  apiVersion: argoproj.io/v1alpha1
+                  kind: Application
+                  metadata:
+                    name: smart-log-analyzer
+                    namespace: openshift-gitops
+                  spec:
+                    project: default
+                    source:
+                      repoURL: "${CONFIG_REPO_URL}"
+                      targetRevision: "${CONFIG_REPO_REVISION}"
+                      path: helm/smart-log-analyzer
+                      helm:
+                        valueFiles:
+                          - values-${RUNTIME}.yaml
+                    destination:
+                      server: https://kubernetes.default.svc
+                      namespace: ${NS}
+                    syncPolicy:
+                      automated:
+                        prune: false
+                        selfHeal: false
+                  ARGOEOF
+                    echo "ArgoCD Application applied. Deployments will be created by ArgoCD sync."
                   fi
 
                   # Update the state ConfigMap

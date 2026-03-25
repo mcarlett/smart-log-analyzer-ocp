@@ -1,0 +1,230 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build
+spec:
+  params:
+    - name: repo-url
+      type: string
+      description: Git repository URL
+      default: "https://github.com/loop9x/smart-log-analyzer.git"
+    - name: repo-revision
+      type: string
+      description: Git revision (branch, tag, or commit SHA)
+      default: main
+    - name: app-path
+      type: string
+      description: Path within the repository to the Camel application
+      default: correlator
+    - name: app-name
+      type: string
+      description: Application name (used for the container image)
+      default: correlator
+    - name: namespace
+      type: string
+      description: Target namespace for the container image
+      default: slog-analyzer
+    - name: camel-image
+      type: string
+      description: Image containing the Camel CLI for export
+      default: "quay.io/mcarlett/camel-launcher:4.18.0"
+    - name: gav
+      type: string
+      description: Maven groupId:artifactId:version for the exported project
+      default: "com.example:correlator:1.0.0"
+    - name: runtime
+      type: string
+      description: "Target runtime for the camel export: quarkus or spring-boot"
+      default: "quarkus"
+    - name: runtime-version
+      type: string
+      description: "Runtime platform version (Quarkus or Spring Boot version). If empty, uses the default from camel export"
+      default: ""
+    - name: extensions
+      type: string
+      description: Comma-separated list of Quarkus extensions to add (only used with quarkus runtime)
+      default: ""
+    - name: deps
+      type: string
+      description: "Comma-separated list of additional dependencies to add during camel export (e.g. for spring-boot starters)"
+      default: ""
+
+  workspaces:
+    - name: shared-workspace
+      description: Shared workspace for source code and build artifacts
+
+  tasks:
+    # Step 0: Initialize workspace permissions
+    - name: init-workspace
+      taskRef:
+        name: init-workspace
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    # Step 1: Clone the repository
+    - name: git-clone
+      runAfter:
+        - init-workspace
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: git-clone
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: URL
+          value: $(params.repo-url)
+        - name: REVISION
+          value: $(params.repo-revision)
+        - name: DELETE_EXISTING
+          value: "true"
+        - name: SUBDIRECTORY
+          value: repo
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+
+    # Step 2: Fix workspace permissions after git-clone
+    - name: fix-workspace
+      runAfter:
+        - git-clone
+      taskRef:
+        name: init-workspace
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    # Step 3: Export Camel application to target runtime (quarkus or spring-boot)
+    - name: camel-export
+      runAfter:
+        - fix-workspace
+      taskRef:
+        name: camel-export
+      params:
+        - name: app-path
+          value: repo/$(params.app-path)
+        - name: camel-image
+          value: $(params.camel-image)
+        - name: gav
+          value: $(params.gav)
+        - name: runtime
+          value: $(params.runtime)
+        - name: runtime-version
+          value: $(params.runtime-version)
+        - name: deps
+          value: $(params.deps)
+        - name: export-dir
+          value: export
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    # Step 4: Add Quarkus extensions (only for quarkus runtime)
+    - name: add-quarkus-extension
+      when:
+        - input: "$(params.runtime)"
+          operator: in
+          values: ["quarkus"]
+      runAfter:
+        - camel-export
+      taskRef:
+        name: add-quarkus-extension
+      params:
+        - name: extensions
+          value: "$(params.extensions)"
+        - name: export-dir
+          value: export
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: maven-repo
+          workspace: shared-workspace
+          subPath: m2-settings
+
+    # Step 4b: Fix workspace permissions after export/extensions
+    - name: fix-export-permissions
+      runAfter:
+        - add-quarkus-extension
+        - camel-export
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: fix-permissions
+            image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+            securityContext:
+              runAsUser: 0
+            script: |
+              #!/usr/bin/env bash
+              chown -R 65532:0 $(workspaces.source.path)/export
+              chown -R 65532:0 $(workspaces.source.path)/m2-settings 2>/dev/null || true
+
+    # Step 5: Build application with Maven
+    - name: maven-build
+      runAfter:
+        - fix-export-permissions
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      taskSpec:
+        workspaces:
+          - name: source
+        steps:
+          - name: maven-goals
+            image: registry.access.redhat.com/ubi9/openjdk-21:latest
+            workingDir: $(workspaces.source.path)/export
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              ./mvnw -Dmaven.repo.local=$(workspaces.source.path)/m2-settings/repository clean package
+            securityContext:
+              runAsUser: 0
+
+    # Step 6: Write Dockerfile from ConfigMap to workspace
+    - name: prepare-dockerfile
+      runAfter:
+        - maven-build
+      taskRef:
+        name: prepare-dockerfile
+      params:
+        - name: export-dir
+          value: export
+        - name: runtime
+          value: $(params.runtime)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    # Step 7: Build container image with Buildah
+    - name: build-image
+      runAfter:
+        - prepare-dockerfile
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: buildah
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: IMAGE
+          value: image-registry.openshift-image-registry.svc:5000/$(params.namespace)/$(params.app-name):latest
+        - name: DOCKERFILE
+          value: src/main/docker/Dockerfile.jvm
+        - name: CONTEXT
+          value: .
+        - name: TLS_VERIFY
+          value: "false"
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+          subPath: export

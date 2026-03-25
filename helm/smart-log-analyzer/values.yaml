@@ -1,0 +1,53 @@
+namespace: slog-analyzer
+runtime: quarkus
+
+imageRegistry: image-registry.openshift-image-registry.svc:5000
+
+vault:
+  role: sa-hashicorp-vault
+  serviceAccount: sa-hashicorp-vault
+
+components:
+  correlator:
+    enabled: true
+    replicas: 1
+    memoryLimit: 2Gi
+    strategy: RollingUpdate
+    expose: false
+    storage: {}
+
+  analyzer:
+    enabled: true
+    replicas: 1
+    memoryLimit: 2Gi
+    strategy: RollingUpdate
+    expose: false
+    storage: {}
+    vaultSecrets:
+      - name: openai
+        path: secret/data/openai
+        env:
+          - envVar: CAMEL_COMPONENT_OPENAI_API_KEY
+            field: api-key
+          - envVar: CAMEL_COMPONENT_OPENAI_BASE_URL
+            field: base-url
+          - envVar: CAMEL_COMPONENT_OPENAI_MODEL
+            field: model
+
+  ui-console:
+    enabled: true
+    replicas: 1
+    memoryLimit: 2Gi
+    strategy: Recreate
+    expose: true
+    storage:
+      mountPath: /storage
+      size: 1Gi
+    extraEnv:
+      - name: ANALYZER_STORAGE_ROOT
+        value: /storage
+
+# Quarkus-specific settings
+quarkus:
+  nettyWorkaround: true
+  javaOptsAppend: "-Dio.netty.transport.noNative=true"

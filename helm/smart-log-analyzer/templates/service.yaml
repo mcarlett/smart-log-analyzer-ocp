@@ -1,0 +1,20 @@
+{{- range $name, $component := .Values.components }}
+{{- if and $component.enabled $component.expose }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    app: {{ $name }}
+    app.kubernetes.io/name: {{ $name }}
+    app.kubernetes.io/part-of: smart-log-analyzer
+spec:
+  selector:
+    app: {{ $name }}
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+{{- end }}
+{{- end }}

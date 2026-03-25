@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: smart-log-analyzer
+  namespace: openshift-gitops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mcarlett/smart-log-analyzer-ocp.git
+    targetRevision: gitops
+    path: helm/smart-log-analyzer
+    helm:
+      valueFiles:
+        - values-spring-boot.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: slog-analyzer
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false

@@ -1,0 +1,109 @@
+{{- range $name, $component := .Values.components }}
+{{- if $component.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    app: {{ $name }}
+    app.kubernetes.io/name: {{ $name }}
+    app.kubernetes.io/part-of: smart-log-analyzer
+spec:
+  replicas: {{ $component.replicas }}
+  strategy:
+    type: {{ $component.strategy }}
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: {{ $.Values.vault.role | quote }}
+        vault.hashicorp.com/agent-inject-secret-env: "secret/data/amq-username"
+        vault.hashicorp.com/agent-inject-template-env: |
+          {{`{{- with secret "secret/data/amq-username" -}}`}}
+          export AMQ_USERNAME="{{ `{{ .Data.data.value }}` }}"
+          {{`{{- end }}`}}
+          {{`{{- with secret "secret/data/amq-password" -}}`}}
+          export AMQ_PASSWORD="{{ `{{ .Data.data.value }}` }}"
+          {{`{{- end }}`}}
+          {{`{{- with secret "secret/data/datagrid-username" -}}`}}
+          export DATAGRID_USERNAME="{{ `{{ .Data.data.value }}` }}"
+          {{`{{- end }}`}}
+          {{`{{- with secret "secret/data/datagrid-password" -}}`}}
+          export DATAGRID_PASSWORD="{{ `{{ .Data.data.value }}` }}"
+          {{`{{- end }}`}}
+        {{- if $component.vaultSecrets }}
+        {{- range $idx, $vs := $component.vaultSecrets }}
+        vault.hashicorp.com/agent-inject-secret-{{ $vs.name }}: {{ $vs.path | quote }}
+        vault.hashicorp.com/agent-inject-template-{{ $vs.name }}: |
+          {{- range $vs.env }}
+          {{ printf `{{- with secret "%s" -}}` $vs.path }}
+          export {{ .envVar }}="{{ printf `{{ .Data.data.%s }}` .field }}"
+          {{ `{{- end }}` }}
+          {{- end }}
+        {{- end }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $.Values.vault.serviceAccount }}
+      containers:
+        - name: {{ $name }}
+          image: {{ $.Values.imageRegistry }}/{{ $.Values.namespace }}/{{ $name }}:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              . /vault/secrets/env
+              {{- if $component.vaultSecrets }}
+              {{- range $component.vaultSecrets }}
+              . /vault/secrets/{{ .name }}
+              {{- end }}
+              {{- end }}
+              exec /deployments/run-java.sh
+          resources:
+            limits:
+              memory: {{ $component.memoryLimit }}
+          envFrom:
+            - configMapRef:
+                name: infra-endpoints
+            - configMapRef:
+                name: otel-infra-endpoints
+          env:
+            {{- if and (eq $.Values.runtime "quarkus") $.Values.quarkus.nettyWorkaround }}
+            - name: JAVA_OPTS_APPEND
+              value: {{ $.Values.quarkus.javaOptsAppend | quote }}
+            {{- end }}
+            {{- if $component.extraEnv }}
+            {{- toYaml $component.extraEnv | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: app-config
+              mountPath: /deployments/config
+            - name: kafka-ca
+              mountPath: /etc/kafka-ca
+              readOnly: true
+            {{- if $component.storage }}
+            {{- if $component.storage.mountPath }}
+            - name: app-storage
+              mountPath: {{ $component.storage.mountPath }}
+            {{- end }}
+            {{- end }}
+      volumes:
+        - name: app-config
+          configMap:
+            name: {{ $name }}-config
+        - name: kafka-ca
+          secret:
+            secretName: kafka-cluster-ca
+        {{- if $component.storage }}
+        {{- if $component.storage.mountPath }}
+        - name: app-storage
+          persistentVolumeClaim:
+            claimName: {{ $name }}-storage
+        {{- end }}
+        {{- end }}
+{{- end }}
+{{- end }}
