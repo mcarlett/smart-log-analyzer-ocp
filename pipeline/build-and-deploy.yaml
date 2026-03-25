@@ -429,13 +429,13 @@ spec:
               oc set env deployment/"${APP}" -n "${NS}" "${PAIRS[@]}"
             fi
 
-            # Expose the deployment via a Route if requested
+            # Expose the deployment via a Route with edge TLS if requested
             EXPOSE="$(params.expose)"
             if [ "${EXPOSE}" = "true" ]; then
-              oc expose deployment/"${APP}" -n "${NS}" --port=8080
-              oc expose svc/"${APP}" -n "${NS}"
+              oc expose deployment/"${APP}" -n "${NS}" --port=8080 --dry-run=client -o yaml | oc apply -n "${NS}" -f -
+              oc create route edge "${APP}" --service="${APP}" -n "${NS}" --insecure-policy=Redirect --dry-run=client -o yaml | oc apply -n "${NS}" -f -
               ROUTE_HOST=$(oc get route "${APP}" -n "${NS}" -o jsonpath='{.spec.host}')
-              echo "Route created: http://${ROUTE_HOST}"
+              echo "Route created: https://${ROUTE_HOST}"
             fi
 
             # Set deployment strategy
