@@ -1,6 +1,6 @@
 # Log Generator
 
-Deploys the [log-generator](https://github.com/apache/camel-jbang-examples/tree/main/smart-log-analyzer/log-generator) Camel application in a dedicated `log-generator` namespace. This app simulates order processing with random failures to generate realistic log data for testing the Smart Log Analyzer.
+Deploys the [log-generator](https://github.com/mcarlett/camel-jbang-examples/tree/tekton/smart-log-analyzer/log-generator) Camel application in a dedicated `log-generator` namespace. This app simulates order processing with random failures to generate realistic log data for testing the Smart Log Analyzer.
 
 ## Prerequisites
 
@@ -35,7 +35,7 @@ oc create -f log-generator/pipelinerun.yaml -n $NS
 | Parameter | Default | Description |
 |---|---|---|
 | `namespace` | `log-generator` | Target namespace for deployment |
-| `repo-url` | `https://github.com/apache/camel-jbang-examples.git` | Git repository URL |
-| `repo-branch` | `main` | Git branch |
+| `repo-url` | `https://github.com/mcarlett/camel-jbang-examples.git` | Git repository URL |
+| `repo-branch` | `tekton` | Git branch |
 | `app-path` | `smart-log-analyzer/log-generator` | Path to the app within the repo |
 | `image` | `quay.io/mcarlett/camel-launcher:4.18.0` | Base image for running `camel run` |

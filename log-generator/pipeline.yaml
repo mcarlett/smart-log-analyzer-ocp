@@ -9,10 +9,10 @@ spec:
       default: "log-generator"
     - name: repo-url
       type: string
-      default: "https://github.com/apache/camel-jbang-examples.git"
+      default: "https://github.com/mcarlett/camel-jbang-examples.git"
     - name: repo-branch
       type: string
-      default: "main"
+      default: "tekton"
     - name: app-path
       type: string
       default: "smart-log-analyzer/log-generator"
@@ -87,9 +87,10 @@ spec:
 
             cd $(workspaces.manifest_dir.path)/"${APP_PATH}"
 
-            # Create a ConfigMap with the Camel route
+            # Create a ConfigMap with the Camel route and properties
             oc create configmap ${APP}-routes \
               --from-file=log-generator.camel.yaml \
+              --from-file=application-dev.properties \
               -n "${NS}" --dry-run=client -o yaml | oc apply -f -
 
             # Create the deployment
@@ -113,7 +114,7 @@ spec:
 
             # Set the container command and writable home directory
             oc patch deployment/${APP} -n "${NS}" --type=json \
-              -p='[{"op":"add","path":"/spec/template/spec/containers/0/command","value":["camel","run","/routes/log-generator.camel.yaml"]},{"op":"add","path":"/spec/template/spec/containers/0/workingDir","value":"/tmp"}]'
+              -p='[{"op":"add","path":"/spec/template/spec/containers/0/command","value":["camel","run","/routes/log-generator.camel.yaml","/routes/application-dev.properties","--dep=org.apache.camel:camel-opentelemetry2"]},{"op":"add","path":"/spec/template/spec/containers/0/workingDir","value":"/tmp"}]'
             oc set env deployment/${APP} -n "${NS}" HOME=/tmp
 
             # Scale up
