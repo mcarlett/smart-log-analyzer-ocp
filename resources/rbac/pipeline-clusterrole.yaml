@@ -60,3 +60,16 @@ rules:
     resources:
       - pods/exec
     verbs: ["create"]
+
+  # Tekton resources (for dispatch-builds task to create PipelineRuns)
+  - apiGroups: ["tekton.dev"]
+    resources:
+      - pipelineruns
+      - taskruns
+    verbs: ["get", "list", "watch", "create"]
+
+  # PersistentVolumeClaims (for volumeClaimTemplates in PipelineRuns)
+  - apiGroups: [""]
+    resources:
+      - persistentvolumeclaims
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

@@ -1,0 +1,18 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: github-push-listener
+spec:
+  serviceAccountName: pipeline
+  triggers:
+    - name: push-to-main
+      interceptors:
+        - ref:
+            name: "cel"
+          params:
+            - name: "filter"
+              value: "body.ref == 'refs/heads/main'"
+      bindings:
+        - ref: github-push-binding
+      template:
+        ref: dispatch-builds

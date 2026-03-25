@@ -7,9 +7,9 @@ spec:
     name: build-and-deploy
   params:
     - name: repo-url
-      value: https://github.com/apache/camel-jbang-examples.git
+      value: https://github.com/mcarlett/camel-jbang-examples.git
     - name: repo-revision
-      value: main
+      value: tekton
     - name: app-path
       value: smart-log-analyzer/correlator
     - name: app-name

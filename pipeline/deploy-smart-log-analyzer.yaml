@@ -7,11 +7,11 @@ spec:
     - name: repo-url
       type: string
       description: Git repository URL
-      default: "https://github.com/apache/camel-jbang-examples.git"
+      default: "https://github.com/mcarlett/camel-jbang-examples.git"
     - name: repo-revision
       type: string
       description: Git revision (branch, tag, or commit SHA)
-      default: main
+      default: tekton
     - name: namespace
       type: string
       description: Target namespace for deployment

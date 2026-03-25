@@ -1,0 +1,177 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: poll-source-repo
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          serviceAccountName: pipeline
+          restartPolicy: Never
+          containers:
+            - name: poll
+              image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+              env:
+                - name: GITHUB_OWNER
+                  value: "mcarlett"
+                - name: GITHUB_REPO
+                  value: "camel-jbang-examples"
+                - name: BRANCH
+                  value: "tekton"
+                - name: REPO_URL
+                  value: "https://github.com/mcarlett/camel-jbang-examples.git"
+                - name: RUNTIME
+                  value: "spring-boot"
+                - name: CONFIG_REPO_URL
+                  value: "https://github.com/mcarlett/smart-log-analyzer-ocp.git"
+                - name: CONFIG_REPO_REVISION
+                  value: "main"
+                - name: CAMEL_IMAGE
+                  value: "quay.io/mcarlett/camel-launcher:4.18.0"
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -euo pipefail
+
+                  NS=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+                  API="https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}"
+
+                  # Get the last known commit from the ConfigMap (or empty if first run)
+                  LAST_SHA=$(oc get configmap source-repo-state -n "${NS}" -o jsonpath='{.data.last-commit}' 2>/dev/null || echo "")
+
+                  # Get the current HEAD from GitHub API
+                  CURRENT_SHA=$(curl -sf "${API}/commits/${BRANCH}" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])")
+
+                  echo "Last known commit: ${LAST_SHA:-<first run>}"
+                  echo "Current HEAD:      ${CURRENT_SHA}"
+
+                  if [ "${LAST_SHA}" = "${CURRENT_SHA}" ]; then
+                    echo "No new commits. Nothing to do."
+                    exit 0
+                  fi
+
+                  # Determine changed files using GitHub Compare API
+                  BUILD_CORRELATOR=false
+                  BUILD_ANALYZER=false
+                  BUILD_UI_CONSOLE=false
+
+                  if [ -z "${LAST_SHA}" ]; then
+                    echo "First run — skipping build, storing current SHA."
+                    oc create configmap source-repo-state --from-literal=last-commit="${CURRENT_SHA}" -n "${NS}" --dry-run=client -o yaml | oc apply -n "${NS}" -f -
+                    exit 0
+                  fi
+
+                  echo "Fetching diff ${LAST_SHA}...${CURRENT_SHA}..."
+                  CHANGED_FILES=$(curl -sf "${API}/compare/${LAST_SHA}...${CURRENT_SHA}" | python3 -c "
+                  import sys, json
+                  data = json.load(sys.stdin)
+                  for f in data.get('files', []):
+                      print(f['filename'])
+                  ")
+
+                  echo "Changed files:"
+                  echo "${CHANGED_FILES}"
+
+                  echo "${CHANGED_FILES}" | grep -q '^smart-log-analyzer/correlator/' && BUILD_CORRELATOR=true || true
+                  echo "${CHANGED_FILES}" | grep -q '^smart-log-analyzer/analyzer/' && BUILD_ANALYZER=true || true
+                  echo "${CHANGED_FILES}" | grep -q '^smart-log-analyzer/ui-console/' && BUILD_UI_CONSOLE=true || true
+
+                  echo ""
+                  echo "Components to rebuild: correlator=${BUILD_CORRELATOR} analyzer=${BUILD_ANALYZER} ui-console=${BUILD_UI_CONSOLE}"
+
+                  if [ "${BUILD_CORRELATOR}" = "false" ] && [ "${BUILD_ANALYZER}" = "false" ] && [ "${BUILD_UI_CONSOLE}" = "false" ]; then
+                    echo "No smart-log-analyzer components changed."
+                    oc create configmap source-repo-state --from-literal=last-commit="${CURRENT_SHA}" -n "${NS}" --dry-run=client -o yaml | oc apply -n "${NS}" -f -
+                    exit 0
+                  fi
+
+                  # Helper function to create a PipelineRun
+                  create_pipeline_run() {
+                    local APP_NAME="$1"
+                    local APP_PATH="$2"
+                    local GAV="$3"
+                    local EXTRA_PARAMS="${4:-}"
+
+                    echo "Creating PipelineRun for ${APP_NAME}..."
+                    cat <<PEOF | oc create -f -
+                  apiVersion: tekton.dev/v1
+                  kind: PipelineRun
+                  metadata:
+                    generateName: build-${APP_NAME}-
+                    namespace: ${NS}
+                  spec:
+                    pipelineRef:
+                      name: build-and-deploy
+                    params:
+                      - name: repo-url
+                        value: "${REPO_URL}"
+                      - name: repo-revision
+                        value: "${CURRENT_SHA}"
+                      - name: app-path
+                        value: "${APP_PATH}"
+                      - name: app-name
+                        value: "${APP_NAME}"
+                      - name: namespace
+                        value: "${NS}"
+                      - name: camel-image
+                        value: "${CAMEL_IMAGE}"
+                      - name: gav
+                        value: "${GAV}"
+                      - name: config-repo-url
+                        value: "${CONFIG_REPO_URL}"
+                      - name: config-repo-revision
+                        value: "${CONFIG_REPO_REVISION}"
+                      - name: extensions
+                        value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault"
+                      - name: deps
+                        value: "org.apache.camel.springboot:camel-hashicorp-vault-starter"
+                      - name: runtime
+                        value: "${RUNTIME}"
+                  ${EXTRA_PARAMS}
+                    workspaces:
+                      - name: shared-workspace
+                        volumeClaimTemplate:
+                          spec:
+                            accessModes:
+                              - ReadWriteOnce
+                            resources:
+                              requests:
+                                storage: 1Gi
+                  PEOF
+                  }
+
+                  if [ "${BUILD_CORRELATOR}" = "true" ]; then
+                    create_pipeline_run "correlator" "smart-log-analyzer/correlator" "com.example:correlator:1.0.0"
+                  fi
+
+                  if [ "${BUILD_ANALYZER}" = "true" ]; then
+                    ANALYZER_EXTRA='                      - name: env-secret
+                        value: "openai-config"'
+                    create_pipeline_run "analyzer" "smart-log-analyzer/analyzer" "com.example:analyzer:1.0.0" "${ANALYZER_EXTRA}"
+                  fi
+
+                  if [ "${BUILD_UI_CONSOLE}" = "true" ]; then
+                    UI_EXTRA='                      - name: storage-mount-point
+                        value: "/storage"
+                      - name: extra-env
+                        value: "ANALYZER_STORAGE_ROOT=/storage"
+                      - name: expose
+                        value: "true"
+                      - name: deployment-strategy
+                        value: "Recreate"
+                      - name: extensions
+                        value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault,org.apache.camel.quarkus:camel-quarkus-platform-http"'
+                    create_pipeline_run "ui-console" "smart-log-analyzer/ui-console" "com.example:ui-console:1.0.0" "${UI_EXTRA}"
+                  fi
+
+                  # Update the state ConfigMap
+                  oc create configmap source-repo-state --from-literal=last-commit="${CURRENT_SHA}" -n "${NS}" --dry-run=client -o yaml | oc apply -n "${NS}" -f -
+
+                  echo "Done. PipelineRuns created for changed components."

@@ -1,0 +1,24 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: dispatch-builds
+spec:
+  params:
+    - name: repo-url
+    - name: repo-revision
+    - name: before
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: TaskRun
+      metadata:
+        generateName: dispatch-builds-
+      spec:
+        taskRef:
+          name: dispatch-builds
+        params:
+          - name: repo-url
+            value: $(tt.params.repo-url)
+          - name: repo-revision
+            value: $(tt.params.repo-revision)
+          - name: before
+            value: $(tt.params.before)

@@ -17,7 +17,15 @@ smart-log-analyzer-ocp/
 │   ├── 11-camel-export.yaml           # Runs camel export to target runtime (quarkus or spring-boot)
 │   ├── 12-add-quarkus-extension.yaml  # Adds Quarkus extensions to the exported project
 │   ├── 13-prepare-dockerfile.yaml     # Writes Dockerfile from base-image-config ConfigMap to workspace
-│   └── 14-create-app-config.yaml      # Creates app-config ConfigMap from resolved properties file
+│   ├── 14-create-app-config.yaml      # Creates app-config ConfigMap from resolved properties file
+│   └── 15-dispatch-builds.yaml        # Determines changed components from git diff and creates PipelineRuns
+│
+├── triggers/
+│   ├── event-listener.yaml            # EventListener for GitHub push webhooks (filtered to main branch)
+│   ├── trigger-binding.yaml           # Extracts repo URL and commit SHAs from webhook payload
+│   ├── trigger-template.yaml          # Creates a dispatch-builds TaskRun on push events
+│   ├── route.yaml                     # Route to expose the EventListener for GitHub webhooks
+│   └── cronjob-poll.yaml              # CronJob that polls the Git repo for changes (when cluster is not reachable from GitHub)
 │
 ├── pipeline/
 │   ├── build-and-deploy.yaml           # Pipeline orchestrating build tasks for a single component
@@ -62,7 +70,8 @@ smart-log-analyzer-ocp/
     ├── secrets/
     │   └── infra-accounts.yaml              # Infrastructure credentials (AMQ Broker, Data Grid)
     └── templates/
-        └── kafka-cluster-ca.yaml            # Template for Kafka cluster CA certificate (must be populated and applied manually)
+        ├── kafka-cluster-ca.yaml            # Template for Kafka cluster CA certificate (must be populated and applied manually)
+        └── openai-config.yaml               # Template for OpenAI/LLM configuration (API key, base URL, model)
 ```
 
 ## Pipeline Execution Order
@@ -193,6 +202,42 @@ tkn pipelinerun logs -f -L
 tkn pipelinerun list
 ```
 
+### Automatic builds
+
+The `triggers/` directory provides two approaches to automatically rebuild components when code is pushed to the source repository (`https://github.com/mcarlett/camel-jbang-examples`). Both inspect `git diff` between commits and create `build-and-deploy` PipelineRuns only for components with changes under `smart-log-analyzer/correlator/`, `smart-log-analyzer/analyzer/`, or `smart-log-analyzer/ui-console/`.
+
+#### Option A: GitHub Webhook (cluster reachable from GitHub)
+
+Uses Tekton Triggers with an EventListener exposed via a Route:
+
+```bash
+# Apply Tekton Triggers resources (EventListener, TriggerBinding, TriggerTemplate, Route)
+oc apply -f triggers/event-listener.yaml -f triggers/trigger-binding.yaml -f triggers/trigger-template.yaml -f triggers/route.yaml -n slog-analyzer
+oc apply -f tasks/15-dispatch-builds.yaml -n slog-analyzer
+
+# Get the webhook URL
+WEBHOOK_URL=$(oc get route github-webhook -n slog-analyzer -o jsonpath='https://{.spec.host}')
+echo "Webhook URL: ${WEBHOOK_URL}"
+```
+
+Then configure a webhook in GitHub (Settings → Webhooks):
+
+- **Payload URL**: the webhook URL from above
+- **Content type**: `application/json`
+- **Events**: Just the push event
+
+#### Option B: Polling CronJob (cluster not reachable from GitHub)
+
+A CronJob polls the Git repository every 5 minutes and triggers builds for changed components. It stores the last known commit SHA in a `source-repo-state` ConfigMap:
+
+```bash
+oc apply -f triggers/cronjob-poll.yaml -n slog-analyzer
+```
+
+The polling interval can be adjusted by editing the `schedule` field in `triggers/cronjob-poll.yaml` (default: `*/5 * * * *`).
+
+To change the runtime, source repository, or branch, edit the environment variables in the CronJob spec.
+
 ### Build a different component
 
 The pipeline is parametrizable. To build a different component of the smart-log-analyzer (e.g. `analyzer`, `ui-console`):
@@ -211,8 +256,8 @@ tkn pipeline start build-and-deploy \
 
 | Parameter | Default | Description |
 |---|---|---|
-| `repo-url` | `https://github.com/apache/camel-jbang-examples.git` | Git repository URL |
-| `repo-revision` | `main` | Git branch, tag, or commit SHA |
+| `repo-url` | `https://github.com/mcarlett/camel-jbang-examples.git` | Git repository URL |
+| `repo-revision` | `tekton` | Git branch, tag, or commit SHA |
 | `app-path` | `smart-log-analyzer/correlator` | Path within the repo to the Camel app |
 | `app-name` | `correlator` | Application name (image and deployment name) |
 | `namespace` | `slog-analyzer` | Target namespace |
@@ -235,8 +280,8 @@ tkn pipeline start build-and-deploy \
 
 | Parameter | Default | Description |
 |---|---|---|
-| `repo-url` | `https://github.com/apache/camel-jbang-examples.git` | Git repository URL |
-| `repo-revision` | `main` | Git branch, tag, or commit SHA |
+| `repo-url` | `https://github.com/mcarlett/camel-jbang-examples.git` | Git repository URL |
+| `repo-revision` | `tekton` | Git branch, tag, or commit SHA |
 | `namespace` | `slog-analyzer` | Target namespace |
 | `camel-image` | `quay.io/mcarlett/camel-launcher:4.18.0` | Image with the Camel CLI |
 | `config-repo-url` | `https://github.com/mcarlett/smart-log-analyzer-ocp.git` | Git repository URL containing app-config |
