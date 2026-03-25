@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openai-config
+type: Opaque
+stringData:
+  CAMEL_COMPONENT_OPENAI_API_KEY: "ollama"
+  CAMEL_COMPONENT_OPENAI_BASE_URL: "http://ollama:11434/v1"
+  CAMEL_COMPONENT_OPENAI_MODEL: "granite4:3b"

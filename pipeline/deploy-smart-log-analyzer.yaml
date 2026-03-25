@@ -184,6 +184,8 @@ spec:
                   value: "org.apache.camel.quarkus:camel-quarkus-hashicorp-vault"
                 - name: deps
                   value: "org.apache.camel.springboot:camel-hashicorp-vault-starter"
+                - name: env-secret
+                  value: "openai-config"
                 - name: runtime
                   value: "$(params.runtime)"
                 - name: runtime-version

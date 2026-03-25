@@ -76,6 +76,10 @@ spec:
       type: string
       description: "Deployment strategy: RollingUpdate or Recreate"
       default: "RollingUpdate"
+    - name: env-secret
+      type: string
+      description: "Name of a Secret to inject as environment variables into the deployment. If empty, no secret is injected."
+      default: ""
     - name: expose
       type: string
       description: "If true, creates a Route to expose the deployment externally"
@@ -409,6 +413,13 @@ spec:
                 --type=persistentVolumeClaim \
                 --claim-name="${PVC_NAME}" \
                 --mount-path="${STORAGE_MOUNT}"
+            fi
+
+            # Inject env vars from a Secret if provided
+            ENV_SECRET="$(params.env-secret)"
+            if [ -n "${ENV_SECRET}" ]; then
+              oc set env deployment/"${APP}" -n "${NS}" \
+                --from=secret/"${ENV_SECRET}"
             fi
 
             # Set extra environment variables if provided

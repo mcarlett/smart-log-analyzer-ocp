@@ -144,7 +144,8 @@ graph LR
 - OpenShift 4 cluster
 - Red Hat OpenShift Pipelines operator installed (provides `git-clone`, `buildah`, `openshift-client`, `helm-upgrade-from-repo` ClusterTasks)
 - Tekton CLI (`tkn`) (optional, for monitoring runs)
-- Kafka cluster CA certificate: populate `resources/secrets/kafka-cluster-ca.yaml` with the CA certificate (PEM format) of the external Kafka cluster used for OpenTelemetry data
+- Kafka cluster CA certificate: populate `resources/templates/kafka-cluster-ca.yaml` with the CA certificate (PEM format) of the external Kafka cluster used for OpenTelemetry data
+- OpenAI configuration: edit `resources/templates/openai-config.yaml` with the desired API key, base URL, and model, then apply it before deploying the analyzer (`oc apply -f resources/templates/openai-config.yaml -n slog-analyzer`)
 
 The following operators are installed automatically by the `infra-deploy` pipeline:
 
@@ -330,6 +331,31 @@ The `infra-accounts` secret is defined in `resources/secrets/infra-accounts.yaml
 | `amq-password` | `artemis` | AMQ Broker admin password |
 | `datagrid-username` | `admin` | Infinispan/Data Grid admin username |
 | `datagrid-password` | `password` | Infinispan/Data Grid admin password |
+
+### OpenAI configuration
+
+The analyzer component uses the [Camel OpenAI component](https://camel.apache.org/components/4.18.x/openai-component.html) for log analysis. The connection details are provided via the `openai-config` secret (template at `resources/templates/openai-config.yaml`), which is injected as environment variables into the analyzer deployment.
+
+| Key | Default | Description |
+|---|---|---|
+| `CAMEL_COMPONENT_OPENAI_API_KEY` | `ollama` | API key for the OpenAI-compatible endpoint |
+| `CAMEL_COMPONENT_OPENAI_BASE_URL` | `http://ollama:11434/v1` | Base URL of the OpenAI-compatible API |
+| `CAMEL_COMPONENT_OPENAI_MODEL` | `granite4:3b` | Model to use for chat completion |
+
+Edit the template with the desired values before applying. For example, to use Red Hat OpenShift AI Model-as-a-Service (MaaS):
+
+```yaml
+stringData:
+  CAMEL_COMPONENT_OPENAI_API_KEY: "<your-api-key>"
+  CAMEL_COMPONENT_OPENAI_BASE_URL: "https://granite-3-3-8b-instruct-maas-apicast-production.apps.prod.rhoai.rh-aiservices-bu.com:443/v1"
+  CAMEL_COMPONENT_OPENAI_MODEL: "granite-3-3-8b-instruct"
+```
+
+Then apply the secret before deploying:
+
+```bash
+oc apply -f resources/templates/openai-config.yaml -n slog-analyzer
+```
 
 ## Generated Secrets and ConfigMaps
 
