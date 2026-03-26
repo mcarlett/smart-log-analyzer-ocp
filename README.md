@@ -92,6 +92,60 @@ smart-log-analyzer-ocp/
         └── openai-config.yaml               # Template for OpenAI/LLM configuration (API key, base URL, model)
 ```
 
+## Deployment Overview
+
+```mermaid
+graph TB
+    subgraph "Source Repository (loop9x/smart-log-analyzer)"
+        SRC[Application Source Code]
+    end
+
+    subgraph "Config Repository (mcarlett/smart-log-analyzer-ocp)"
+        HELM[Helm Chart + Properties]
+    end
+
+    subgraph "OpenShift Cluster"
+        subgraph "Triggers"
+            CRON[CronJob poll-source-repo]
+            WH[GitHub Webhook]
+        end
+
+        subgraph "Tekton Pipelines"
+            BUILD[build Pipeline]
+        end
+
+        subgraph "Container Registry"
+            IS[ImageStreams<br/>correlator:latest<br/>analyzer:latest<br/>ui-console:latest]
+        end
+
+        subgraph "ArgoCD"
+            ARGO[Application<br/>smart-log-analyzer]
+        end
+
+        subgraph "Application Deployments"
+            DEP[Deployments<br/>correlator / analyzer / ui-console]
+            CM[ConfigMaps<br/>application.properties]
+            SVC[Services + Routes]
+        end
+    end
+
+    SRC -- "push" --> CRON
+    SRC -- "push" --> WH
+    CRON -- "detects changed components" --> BUILD
+    WH -- "detects changed components" --> BUILD
+    BUILD -- "buildah push" --> IS
+    IS -- "image.openshift.io/triggers" --> DEP
+
+    HELM -- "git push to gitops branch" --> ARGO
+    ARGO -- "helm sync" --> DEP
+    ARGO -- "helm sync" --> CM
+    ARGO -- "helm sync" --> SVC
+```
+
+**Source code changes** (correlator, analyzer, ui-console) are detected by the CronJob or webhook, which triggers the `build` pipeline for each changed component. The pipeline builds a container image and pushes it to the internal registry. The `image.openshift.io/triggers` annotation on each Deployment automatically triggers a rollout when the ImageStream tag is updated.
+
+**Helm chart or properties changes** are detected by ArgoCD, which syncs the Helm chart from the `gitops` branch and updates the Deployments, ConfigMaps, Services, and Routes.
+
 ## Pipeline Execution Order
 
 ### infra-deploy
