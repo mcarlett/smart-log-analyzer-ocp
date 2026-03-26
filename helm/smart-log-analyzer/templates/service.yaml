@@ -1,5 +1,5 @@
 {{- range $name, $component := .Values.components }}
-{{- if and $component.enabled $component.expose }}
+{{- if $component.enabled }}
 ---
 apiVersion: v1
 kind: Service
@@ -13,8 +13,13 @@ spec:
   selector:
     app: {{ $name }}
   ports:
-    - port: 8080
+    - name: http
+      port: 8080
       targetPort: 8080
+      protocol: TCP
+    - name: management
+      port: 8081
+      targetPort: 8081
       protocol: TCP
 {{- end }}
 {{- end }}
