@@ -14,8 +14,6 @@ spec:
   workspaces:
     - name: source
       description: Workspace containing the exported project
-    - name: maven-repo
-      description: Persistent Maven repository cache
   steps:
     - name: add-extension
       image: registry.access.redhat.com/ubi9/ubi-minimal:latest
@@ -30,6 +28,5 @@ spec:
 
         echo "Adding Quarkus extensions: $(params.extensions)"
         ./mvnw quarkus:add-extension \
-          -Dextensions="$(params.extensions)" \
-          -Dmaven.repo.local="$(workspaces.maven-repo.path)/repository"
+          -Dextensions="$(params.extensions)"
         echo "Extensions added successfully."

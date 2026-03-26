@@ -78,8 +78,6 @@ smart-log-analyzer-ocp/
     │       └── application-prod-spring-boot.properties  # Production config for Spring Boot runtime
     ├── vault/
     │   └── sa-hashicorp-vault.yaml          # ServiceAccount for application access to Vault
-    ├── pvc/
-    │   └── maven-repo.yaml                  # PVC for persistent Maven repository cache (1Gi)
     ├── configmaps/
     │   ├── base-image-config-quarkus.yaml       # Dockerfile for Quarkus fast-jar image layout
     │   ├── base-image-config-spring-boot.yaml   # Dockerfile for Spring Boot fat-jar image layout
@@ -145,6 +143,59 @@ graph TB
 **Source code changes** (correlator, analyzer, ui-console) are detected by the CronJob or webhook, which triggers the `build` pipeline for each changed component. The pipeline builds a container image and pushes it to the internal registry. The `image.openshift.io/triggers` annotation on each Deployment automatically triggers a rollout when the ImageStream tag is updated.
 
 **Helm chart or properties changes** are detected by ArgoCD, which syncs the Helm chart from the `gitops` branch and updates the Deployments, ConfigMaps, Services, and Routes.
+
+## Application Architecture
+
+```mermaid
+graph TB
+    subgraph "External"
+        KAFKA[Kafka<br/>otlp_logs / otlp_spans<br/>port 9093 TLS]
+    end
+
+    subgraph "Application Components"
+        CORRELATOR[Smart Log Analyzer<br/>Correlator]
+        ANALYZER[Smart Log Analyzer<br/>Analyzer]
+        UI_CONSOLE[Smart Log Analyzer<br/>UI Console<br/>port 8080]
+    end
+
+    subgraph "Infrastructure"
+        AMQ[AMQ Broker<br/>Artemis<br/>port 61616]
+        ISPN[Infinispan<br/>Data Grid<br/>port 11222]
+        VAULT[HashiCorp Vault<br/>port 8200]
+        FS[File Storage<br/>/tmp/analyzer-store]
+    end
+
+    %% Correlator
+    KAFKA -- "consume logs & spans" --> CORRELATOR
+    CORRELATOR -- "store events by traceId<br/>(GET/PUT caches: events,<br/>events-to-process)" --> ISPN
+    CORRELATOR -- "send traceId on error<br/>(queue: error-logs)" --> AMQ
+
+    %% Analyzer
+    AMQ -- "consume traceIds<br/>(queue: error-logs)" --> ANALYZER
+    ANALYZER -- "retrieve events by traceId<br/>(GET cache: events)" --> ISPN
+    ANALYZER -- "send analysis result<br/>(queue: analysis-result)" --> AMQ
+
+    %% UI Console
+    AMQ -- "consume results<br/>(queue: analysis-result)" --> UI_CONSOLE
+    UI_CONSOLE -- "store results as files<br/>(traceId.txt)" --> FS
+    UI_CONSOLE -- "query cache stats<br/>(REST API)" --> ISPN
+    UI_CONSOLE -- "query queue stats<br/>(activemq.management)" --> AMQ
+    UI_CONSOLE -- "proxy metrics<br/>(HTTP)" --> CORRELATOR
+    UI_CONSOLE -- "proxy metrics + state<br/>(HTTP)" --> ANALYZER
+
+    %% Vault (sidecar injection)
+    VAULT -. "inject credentials<br/>(Vault Agent sidecar)" .-> CORRELATOR
+    VAULT -. "inject credentials<br/>(Vault Agent sidecar)" .-> ANALYZER
+    VAULT -. "inject credentials<br/>(Vault Agent sidecar)" .-> UI_CONSOLE
+```
+
+The **correlator** consumes OpenTelemetry logs and spans from Kafka, correlates them by traceId in Infinispan, and sends error traceIds to the AMQ `error-logs` queue. When cached events expire (after 20s without new errors), the traceId is also forwarded to the queue.
+
+The **analyzer** picks up traceIds from the `error-logs` queue, retrieves the correlated events from Infinispan, sends them to an LLM (OpenAI-compatible API) for root cause analysis, and publishes the result to the `analysis-result` queue.
+
+The **ui-console** consumes analysis results from the `analysis-result` queue, stores them as files, and exposes a REST API (port 8080) for listing and viewing results. It also proxies Prometheus metrics from all components and queries Infinispan/AMQ for live infrastructure stats.
+
+All components receive infrastructure credentials (AMQ, Data Grid) and component-specific secrets (e.g. OpenAI API key) via the **Vault Agent Injector** sidecar.
 
 ## Pipeline Execution Order
 
@@ -228,7 +279,6 @@ oc apply -f resources/templates/project.yaml
 oc apply -f resources/rbac/
 oc apply -f resources/secrets/
 oc apply -f resources/configmaps/
-oc apply -f resources/pvc/
 oc apply -f tasks/
 oc apply -f pipeline/
 
@@ -322,7 +372,7 @@ The `poll-source-repo-config` ConfigMap contains the following keys:
 | `CAMEL_IMAGE` | `quay.io/mcarlett/camel-launcher:4.18.0` | Image with the Camel CLI |
 | `CONFIG_REPO_URL` | `https://github.com/mcarlett/smart-log-analyzer-ocp.git` | Config repository URL (Helm chart) |
 | `CONFIG_REPO_REVISION` | `gitops` | Config repository branch |
-| `DEPS` | `camel:observability-services` | Additional dependencies for `camel export` (`--dep`) |
+| `DEPS` | `camel-observability-services` | Additional dependencies for `camel export` (`--dep`) |
 
 #### Option B: GitHub Webhook (cluster reachable from GitHub)
 
@@ -397,7 +447,7 @@ tkn pipeline start build \
 | `runtime` | `quarkus` | Target runtime for the camel export: `quarkus` or `spring-boot` |
 | `runtime-version` | _(empty)_ | Runtime platform version (Quarkus or Spring Boot). If empty, uses the default from camel export |
 | `extensions` | _(empty)_ | Comma-separated list of Quarkus extensions to add (only used with quarkus runtime) |
-| `deps` | _(empty)_ | Comma-separated list of additional dependencies to add during `camel export` via `--dep` |
+| `deps` | `camel-observability-services` | Comma-separated list of additional dependencies to add during `camel export` via `--dep` |
 
 ### Helm chart values
 
@@ -500,10 +550,6 @@ vault kv put secret/openai \
   base-url="https://your-endpoint/v1" \
   model="granite-3-3-8b-instruct"
 ```
-
-### Maven repository cache
-
-The `build` pipeline uses a persistent `maven-repo` PVC (1Gi, defined in `resources/pvc/maven-repo.yaml`) to cache Maven dependencies across pipeline runs. The PVC is mounted via `subPath: m2-settings` on the `shared-workspace` to both the `add-quarkus-extension` and `maven-build` steps, avoiding repeated downloads and speeding up subsequent builds.
 
 ### Kafka TLS
 

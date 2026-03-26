@@ -65,13 +65,9 @@ spec:
           DEP_ARGS="--dep=${DEPS}"
         fi
 
-        camel export \
-          --runtime="${RUNTIME}" \
-          ${EXTRA_ARGS} \
-          ${DEP_ARGS} \
-          --gav="$(params.gav)" \
-          --fresh \
-          --dir="${EXPORT_DIR}"
+        CMD="camel export --runtime=${RUNTIME} ${EXTRA_ARGS} ${DEP_ARGS} --gav=$(params.gav) --fresh --dir=${EXPORT_DIR}"
+        echo "Running: ${CMD}"
+        eval "${CMD}"
 
         echo "Export completed. Contents of ${EXPORT_DIR}:"
         ls -la "${EXPORT_DIR}"

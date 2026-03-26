@@ -50,7 +50,12 @@ spec:
                   LAST_SHA=$(oc get configmap source-repo-state -n "${NS}" -o jsonpath='{.data.last-commit}' 2>/dev/null || echo "")
 
                   # Get the current HEAD from GitHub API
-                  CURRENT_SHA=$(curl -sf "${API}/commits/${BRANCH}" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])")
+                  RESPONSE=$(curl -s "${API}/commits/${BRANCH}")
+                  if [ -z "${RESPONSE}" ]; then
+                    echo "ERROR: GitHub API returned empty response for ${API}/commits/${BRANCH}"
+                    exit 1
+                  fi
+                  CURRENT_SHA=$(echo "${RESPONSE}" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])")
 
                   echo "Last known commit: ${LAST_SHA:-<first run>}"
                   echo "Current HEAD:      ${CURRENT_SHA}"
@@ -151,19 +156,20 @@ spec:
                     create_pipeline_run "ui-console" "${PATH_PREFIX}ui-console" "com.example:ui-console:1.0.0" "org.apache.camel.quarkus:camel-quarkus-platform-http"
                   fi
 
+                  # Wait for all triggered PipelineRuns to complete
+                  echo "Waiting for build PipelineRuns to complete..."
+                  for app in correlator analyzer ui-console; do
+                    PR=$(oc get pipelinerun -n "${NS}" -l tekton.dev/pipeline=build \
+                      --sort-by=.metadata.creationTimestamp -o name 2>/dev/null \
+                      | grep "build-${app}" | tail -1)
+                    if [ -n "${PR}" ]; then
+                      echo "Waiting for ${PR}..."
+                      oc wait "${PR}" -n "${NS}" --for=condition=Succeeded --timeout=600s || true
+                    fi
+                  done
+
                   # Deploy applications via ArgoCD if deployments are missing
                   if [ "${DEPLOY_MISSING}" = "true" ]; then
-                    echo "Waiting for build PipelineRuns to complete..."
-                    for app in correlator analyzer ui-console; do
-                      PR=$(oc get pipelinerun -n "${NS}" -l tekton.dev/pipeline=build \
-                        --sort-by=.metadata.creationTimestamp -o name 2>/dev/null \
-                        | grep "build-${app}" | tail -1)
-                      if [ -n "${PR}" ]; then
-                        echo "Waiting for ${PR}..."
-                        oc wait "${PR}" -n "${NS}" --for=condition=Succeeded --timeout=600s || true
-                      fi
-                    done
-
                     echo "Applying ArgoCD Application to deploy via Helm chart..."
                     cat <<ARGOEOF | oc apply -f -
                   apiVersion: argoproj.io/v1alpha1
