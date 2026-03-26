@@ -65,7 +65,7 @@ spec:
               . /vault/secrets/{{ .name }}
               {{- end }}
               {{- end }}
-              exec /deployments/run-java.sh
+              exec /opt/jboss/container/java/run/run-java.sh
           resources:
             limits:
               memory: {{ $component.memoryLimit }}
