@@ -23,6 +23,7 @@ spec:
     metadata:
       labels:
         app: {{ $name }}
+        camel.apache.org/app: {{ $name }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
         vault.hashicorp.com/agent-inject: "true"
