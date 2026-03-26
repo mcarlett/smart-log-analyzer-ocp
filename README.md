@@ -24,7 +24,8 @@ smart-log-analyzer-ocp/
 │   ├── trigger-binding.yaml           # Extracts repo URL and commit SHAs from webhook payload
 │   ├── trigger-template.yaml          # Creates a dispatch-builds TaskRun on push events
 │   ├── route.yaml                     # Route to expose the EventListener for GitHub webhooks
-│   └── cronjob-poll.yaml              # CronJob that polls the Git repo for changes (when cluster is not reachable from GitHub)
+│   ├── poll-source-repo-config.yaml   # ConfigMap with polling parameters (source repo, runtime, etc.)
+│   └── cronjob-poll.yaml              # CronJob that polls the Git repo for changes (suspended by default)
 │
 ├── pipeline/
 │   ├── build.yaml           # Build-only pipeline: exports, compiles, and pushes container images
@@ -232,17 +233,30 @@ On the first run (or when application deployments are missing), the CronJob/webh
 
 #### Option A: Polling CronJob (cluster not reachable from GitHub)
 
-A CronJob polls the Git repository every 5 minutes using the GitHub API and triggers builds for changed components. It stores the last known commit SHA in a `source-repo-state` ConfigMap:
+A CronJob polls the Git repository every 5 minutes using the GitHub API and triggers builds for changed components. It stores the last known commit SHA in a `source-repo-state` ConfigMap. The CronJob is **suspended by default** and must be explicitly enabled after configuration.
+
+First, configure the polling parameters by editing `triggers/poll-source-repo-config.yaml`, then apply the ConfigMap and the CronJob:
 
 ```bash
+# Apply the configuration ConfigMap and the CronJob
+oc apply -f triggers/poll-source-repo-config.yaml -n slog-analyzer
 oc apply -f triggers/cronjob-poll.yaml -n slog-analyzer
+
+# Enable the CronJob
+oc patch cronjob poll-source-repo -n slog-analyzer -p '{"spec":{"suspend":false}}'
+```
+
+To suspend it again:
+
+```bash
+oc patch cronjob poll-source-repo -n slog-analyzer -p '{"spec":{"suspend":true}}'
 ```
 
 The polling interval can be adjusted by editing the `schedule` field in `triggers/cronjob-poll.yaml` (default: `*/5 * * * *`).
 
-To change the runtime, source repository, branch, or root subfolder, edit the environment variables in the CronJob spec:
+The `poll-source-repo-config` ConfigMap contains the following keys:
 
-| Env var | Default | Description |
+| Key | Default | Description |
 |---|---|---|
 | `GITHUB_OWNER` | `loop9x` | GitHub repository owner |
 | `GITHUB_REPO` | `smart-log-analyzer` | GitHub repository name |

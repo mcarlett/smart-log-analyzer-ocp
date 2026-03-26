@@ -3,6 +3,7 @@ kind: CronJob
 metadata:
   name: poll-source-repo
 spec:
+  suspend: true
   schedule: "*/5 * * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
@@ -17,25 +18,9 @@ spec:
           containers:
             - name: poll
               image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
-              env:
-                - name: GITHUB_OWNER
-                  value: "loop9x"
-                - name: GITHUB_REPO
-                  value: "smart-log-analyzer"
-                - name: BRANCH
-                  value: "main"
-                - name: REPO_URL
-                  value: "https://github.com/loop9x/smart-log-analyzer.git"
-                - name: APP_ROOT
-                  value: ""
-                - name: RUNTIME
-                  value: "spring-boot"
-                - name: CAMEL_IMAGE
-                  value: "quay.io/mcarlett/camel-launcher:4.18.0"
-                - name: CONFIG_REPO_URL
-                  value: "https://github.com/mcarlett/smart-log-analyzer-ocp.git"
-                - name: CONFIG_REPO_REVISION
-                  value: "gitops"
+              envFrom:
+                - configMapRef:
+                    name: poll-source-repo-config
               command:
                 - /bin/bash
                 - -c
