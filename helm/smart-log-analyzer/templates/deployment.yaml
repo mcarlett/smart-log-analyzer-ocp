@@ -24,6 +24,7 @@ spec:
       labels:
         app: {{ $name }}
       annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
         vault.hashicorp.com/agent-inject: "true"
         vault.hashicorp.com/role: {{ $.Values.vault.role | quote }}
         vault.hashicorp.com/agent-inject-secret-env: "secret/data/amq-username"
