@@ -86,8 +86,7 @@ smart-log-analyzer-ocp/
     │   └── infra-accounts.yaml              # Infrastructure credentials (AMQ Broker, Data Grid)
     └── templates/
         ├── project.yaml                     # Project/namespace with ArgoCD management label
-        ├── kafka-cluster-ca.yaml            # Template for Kafka cluster CA certificate (must be populated and applied manually)
-        └── openai-config.yaml               # Template for OpenAI/LLM configuration (API key, base URL, model)
+        └── kafka-cluster-ca.yaml            # Template for Kafka cluster CA certificate (must be populated and applied manually)
 ```
 
 ## Deployment Overview
@@ -256,7 +255,7 @@ graph LR
 - Red Hat OpenShift GitOps operator installed
 - Tekton CLI (`tkn`) (optional, for monitoring runs)
 - Kafka cluster CA certificate: populate `resources/templates/kafka-cluster-ca.yaml` with the CA certificate (PEM format) of the external Kafka cluster used for OpenTelemetry data
-- OpenAI configuration: edit `resources/templates/openai-config.yaml` with the desired API key, base URL, and model, then apply it before deploying the analyzer (`oc apply -f resources/templates/openai-config.yaml -n slog-analyzer`)
+
 
 The following operators are installed automatically by the `infra-deploy` pipeline:
 
@@ -286,9 +285,6 @@ oc apply -f pipeline/
 oc create -f pipelinerun/infra-deploy-run.yaml
 
 # Create the kafka-cluster-ca secret (see Kafka TLS section below)
-
-# Create the openai-config secret (see OpenAI configuration section below)
-oc apply -f resources/templates/openai-config.yaml -n slog-analyzer
 ```
 
 ### Deploy applications with Helm / ArgoCD
@@ -613,13 +609,7 @@ The analyzer component uses the [Camel OpenAI component](https://camel.apache.or
 | `CAMEL_COMPONENT_OPENAI_BASE_URL` | `http://ollama:11434/v1` | Base URL of the OpenAI-compatible API |
 | `CAMEL_COMPONENT_OPENAI_MODEL` | `granite4:3b` | Model to use for chat completion |
 
-**For pipeline deployments** (`build`): edit and apply the `openai-config` Kubernetes Secret template:
-
-```bash
-oc apply -f resources/templates/openai-config.yaml -n slog-analyzer
-```
-
-**For Helm chart deployments**: store the credentials in Vault (see [Vault Agent Injector](#vault-agent-injector-helm-chart)):
+Store the credentials in Vault (see [Vault Agent Injector](#vault-agent-injector-helm-chart)):
 
 ```bash
 oc exec -it vault-0 -n slog-analyzer -- vault kv put secret/openai \

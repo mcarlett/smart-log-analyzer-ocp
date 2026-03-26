@@ -47,9 +47,6 @@ echo "Creating kafka-cluster-ca secret..."
 oc get secret camel-cluster-cluster-ca-cert -n "${KAFKA_NAMESPACE}" -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/ca.crt
 oc create secret generic kafka-cluster-ca --from-file=ca.crt=/tmp/ca.crt -n "${NAMESPACE}"
 
-echo "Applying openai-config secret..."
-oc apply -f resources/templates/openai-config.yaml -n "${NAMESPACE}"
-
 echo "Setting up GitOps polling (CronJob)..."
 oc apply -f triggers/cronjob-poll.yaml -n "${NAMESPACE}"
 
