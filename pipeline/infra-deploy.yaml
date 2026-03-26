@@ -179,7 +179,7 @@ spec:
         - name: release_namespace
           value: $(params.namespace)
         - name: overwrite_values
-          value: "global.openshift=true,server.dev.enabled=true,server.dev.devRootToken=$(tasks.generate-vault-token.results.token),server.image.repository=docker.io/hashicorp/vault,injector.image.repository=docker.io/hashicorp/vault-k8s"
+          value: "global.openshift=true,server.dev.enabled=true,server.dev.devRootToken=$(tasks.generate-vault-token.results.token),server.image.repository=registry.connect.redhat.com/hashicorp/vault,server.image.tag=latest,injector.image.repository=registry.connect.redhat.com/hashicorp/vault-k8s,injector.image.tag=latest,injector.agentImage.repository=registry.connect.redhat.com/hashicorp/vault,injector.agentImage.tag=latest"
 
     - name: configure-vault
       runAfter:
