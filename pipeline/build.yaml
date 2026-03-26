@@ -46,8 +46,8 @@ spec:
       default: ""
     - name: deps
       type: string
-      description: "Comma-separated list of additional dependencies to add during camel export (e.g. for spring-boot starters)"
-      default: ""
+      description: "Comma-separated list of additional dependencies to add during camel export (e.g. camel:observability-services)"
+      default: "camel:observability-services"
 
   workspaces:
     - name: shared-workspace

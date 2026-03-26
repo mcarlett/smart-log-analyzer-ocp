@@ -322,6 +322,7 @@ The `poll-source-repo-config` ConfigMap contains the following keys:
 | `CAMEL_IMAGE` | `quay.io/mcarlett/camel-launcher:4.18.0` | Image with the Camel CLI |
 | `CONFIG_REPO_URL` | `https://github.com/mcarlett/smart-log-analyzer-ocp.git` | Config repository URL (Helm chart) |
 | `CONFIG_REPO_REVISION` | `gitops` | Config repository branch |
+| `DEPS` | `camel:observability-services` | Additional dependencies for `camel export` (`--dep`) |
 
 #### Option B: GitHub Webhook (cluster reachable from GitHub)
 

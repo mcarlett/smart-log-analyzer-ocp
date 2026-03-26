@@ -125,6 +125,8 @@ spec:
                         value: "${RUNTIME}"
                       - name: extensions
                         value: "${EXTENSIONS}"
+                      - name: deps
+                        value: "${DEPS}"
                     workspaces:
                       - name: shared-workspace
                         volumeClaimTemplate:
