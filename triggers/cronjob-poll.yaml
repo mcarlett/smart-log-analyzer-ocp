@@ -60,8 +60,8 @@ spec:
                   BUILD_ANALYZER=false
                   BUILD_UI_CONSOLE=false
 
-                  if [ "${DEPLOY_MISSING}" = "true" ]; then
-                    echo "Deployments missing — building all components."
+                  if [ "${DEPLOY_MISSING}" = "true" ] || [ -z "${LAST_SHA}" ]; then
+                    echo "First run or deployments missing — building all components."
                     BUILD_CORRELATOR=true
                     BUILD_ANALYZER=true
                     BUILD_UI_CONSOLE=true
@@ -70,12 +70,7 @@ spec:
                     exit 0
                   else
                     echo "Fetching diff ${LAST_SHA}...${CURRENT_SHA}..."
-                    CHANGED_FILES=$(curl -sf "${API}/compare/${LAST_SHA}...${CURRENT_SHA}" | python3 -c "
-                    import sys, json
-                    data = json.load(sys.stdin)
-                    for f in data.get('files', []):
-                        print(f['filename'])
-                    ")
+                    CHANGED_FILES=$(curl -sf "${API}/compare/${LAST_SHA}...${CURRENT_SHA}" | python3 -c "import sys,json; [print(f['filename']) for f in json.load(sys.stdin).get('files',[])]")
 
                     echo "Changed files:"
                     echo "${CHANGED_FILES}"
@@ -99,7 +94,7 @@ spec:
                     local APP_NAME="$1"
                     local APP_PATH="$2"
                     local GAV="$3"
-                    local EXTRA_PARAMS="${4:-}"
+                    local EXTENSIONS="${4:-}"
 
                     echo "Creating PipelineRun for ${APP_NAME}..."
                     cat <<PEOF | oc create -f -
@@ -128,7 +123,8 @@ spec:
                         value: "${GAV}"
                       - name: runtime
                         value: "${RUNTIME}"
-                  ${EXTRA_PARAMS}
+                      - name: extensions
+                        value: "${EXTENSIONS}"
                     workspaces:
                       - name: shared-workspace
                         volumeClaimTemplate:
@@ -150,9 +146,7 @@ spec:
                   fi
 
                   if [ "${BUILD_UI_CONSOLE}" = "true" ]; then
-                    UI_EXTRA='                      - name: extensions
-                        value: "org.apache.camel.quarkus:camel-quarkus-platform-http"'
-                    create_pipeline_run "ui-console" "${PATH_PREFIX}ui-console" "com.example:ui-console:1.0.0" "${UI_EXTRA}"
+                    create_pipeline_run "ui-console" "${PATH_PREFIX}ui-console" "com.example:ui-console:1.0.0" "org.apache.camel.quarkus:camel-quarkus-platform-http"
                   fi
 
                   # Deploy applications via ArgoCD if deployments are missing

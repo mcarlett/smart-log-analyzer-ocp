@@ -87,6 +87,7 @@ smart-log-analyzer-ocp/
     ├── secrets/
     │   └── infra-accounts.yaml              # Infrastructure credentials (AMQ Broker, Data Grid)
     └── templates/
+        ├── project.yaml                     # Project/namespace with ArgoCD management label
         ├── kafka-cluster-ca.yaml            # Template for Kafka cluster CA certificate (must be populated and applied manually)
         └── openai-config.yaml               # Template for OpenAI/LLM configuration (API key, base URL, model)
 ```
@@ -166,8 +167,8 @@ HashiCorp Vault is installed via the [Helm chart](https://helm.releases.hashicor
 ### Initial setup
 
 ```bash
-# Create the target namespace
-oc new-project slog-analyzer
+# Create the target namespace with ArgoCD management label
+oc apply -f resources/templates/project.yaml
 
 # Apply RBAC, secrets, configmaps, tasks, and pipelines
 oc apply -f resources/rbac/
@@ -574,6 +575,12 @@ The pipelines create several Secrets and ConfigMaps at runtime. The following ta
 ## Cleanup
 
 ```bash
+# Delete the ArgoCD Application
+oc delete application smart-log-analyzer -n openshift-gitops
+
+# Uninstall the application Helm release (if installed directly)
+helm uninstall smart-log-analyzer -n slog-analyzer
+
 # Delete Infinispan caches, CRs, and AMQ Broker CRs first (allows operators to clean up)
 oc delete caches.infinispan.org --all -n slog-analyzer
 oc delete infinispan infinispan -n slog-analyzer

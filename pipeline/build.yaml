@@ -52,6 +52,8 @@ spec:
   workspaces:
     - name: shared-workspace
       description: Shared workspace for source code and build artifacts
+    - name: maven-repo
+      description: Persistent workspace for Maven repository cache
 
   tasks:
     # Step 0: Initialize workspace permissions
@@ -173,9 +175,12 @@ spec:
       workspaces:
         - name: source
           workspace: shared-workspace
+        - name: maven-repo
+          workspace: maven-repo
       taskSpec:
         workspaces:
           - name: source
+          - name: maven-repo
         steps:
           - name: maven-goals
             image: registry.access.redhat.com/ubi9/openjdk-21:latest
@@ -183,7 +188,7 @@ spec:
             script: |
               #!/usr/bin/env bash
               set -euo pipefail
-              ./mvnw -Dmaven.repo.local=$(workspaces.source.path)/m2-settings/repository clean package
+              ./mvnw -Dmaven.repo.local=$(workspaces.maven-repo.path)/repository clean package
             securityContext:
               runAsUser: 0
 
