@@ -18,8 +18,8 @@ spec:
       targetPort: 8080
       protocol: TCP
     - name: management
-      port: {{ if eq $.Values.runtime "spring-boot" }}9876{{ else }}8081{{ end }}
-      targetPort: {{ if eq $.Values.runtime "spring-boot" }}9876{{ else }}8081{{ end }}
+      port: 9876
+      targetPort: 9876
       protocol: TCP
 {{- end }}
 {{- end }}
