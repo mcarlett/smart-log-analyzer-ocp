@@ -1,5 +1,0 @@
-runtime: spring-boot
-
-quarkus:
-  nettyWorkaround: false
-  javaOptsAppend: ""

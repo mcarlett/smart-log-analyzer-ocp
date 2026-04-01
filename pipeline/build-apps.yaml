@@ -1,0 +1,291 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build-apps
+spec:
+  params:
+    - name: repo-url
+      type: string
+      description: Git repository URL
+      default: "https://github.com/loop9x/smart-log-analyzer.git"
+    - name: repo-revision
+      type: string
+      description: Git revision (branch, tag, or commit SHA)
+      default: main
+    - name: namespace
+      type: string
+      description: Target namespace for the container images
+      default: slog-analyzer
+    - name: camel-image
+      type: string
+      description: Image containing the Camel CLI for export
+      default: "quay.io/mcarlett/camel-launcher:4.18.0"
+    - name: runtime-version
+      type: string
+      description: "Quarkus version. If empty, uses the default from camel export"
+      default: "3.32.3"
+
+  tasks:
+    - name: build-correlator
+      taskSpec:
+        params:
+          - name: repo-url
+            type: string
+          - name: repo-revision
+            type: string
+          - name: namespace
+            type: string
+          - name: camel-image
+            type: string
+          - name: runtime-version
+            type: string
+        steps:
+          - name: start-and-wait
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+
+              APP_NAME="correlator"
+              GAV="com.example:correlator:1.0.0"
+              DEPS="camel-observability-services,mvn:org.apache.camel.quarkus:camel-quarkus-platform-http"
+
+              RUN=$(cat <<EOF | oc create -f - -o jsonpath='{.metadata.name}'
+              apiVersion: tekton.dev/v1
+              kind: PipelineRun
+              metadata:
+                generateName: build-${APP_NAME}-
+              spec:
+                pipelineRef:
+                  name: build
+                params:
+                  - name: repo-url
+                    value: "$(params.repo-url)"
+                  - name: repo-revision
+                    value: "$(params.repo-revision)"
+                  - name: app-path
+                    value: "${APP_NAME}"
+                  - name: app-name
+                    value: "${APP_NAME}"
+                  - name: namespace
+                    value: "$(params.namespace)"
+                  - name: camel-image
+                    value: "$(params.camel-image)"
+                  - name: gav
+                    value: "${GAV}"
+                  - name: runtime-version
+                    value: "$(params.runtime-version)"
+                  - name: deps
+                    value: "${DEPS}"
+                workspaces:
+                  - name: shared-workspace
+                    volumeClaimTemplate:
+                      spec:
+                        accessModes:
+                          - ReadWriteOnce
+                        resources:
+                          requests:
+                            storage: 1Gi
+              EOF
+              )
+
+              echo "Started ${RUN}"
+              while true; do
+                STATUS=$(oc get pipelinerun "${RUN}" -o jsonpath='{.status.conditions[0].status}' 2>/dev/null || echo "Unknown")
+                REASON=$(oc get pipelinerun "${RUN}" -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null || echo "")
+                if [ "${STATUS}" = "True" ]; then
+                  echo "${RUN}: Succeeded"
+                  exit 0
+                elif [ "${STATUS}" = "False" ]; then
+                  echo "${RUN}: Failed (${REASON})"
+                  exit 1
+                fi
+                sleep 10
+              done
+      params:
+        - name: repo-url
+          value: $(params.repo-url)
+        - name: repo-revision
+          value: $(params.repo-revision)
+        - name: namespace
+          value: $(params.namespace)
+        - name: camel-image
+          value: $(params.camel-image)
+        - name: runtime-version
+          value: $(params.runtime-version)
+
+    - name: build-analyzer
+      taskSpec:
+        params:
+          - name: repo-url
+            type: string
+          - name: repo-revision
+            type: string
+          - name: namespace
+            type: string
+          - name: camel-image
+            type: string
+          - name: runtime-version
+            type: string
+        steps:
+          - name: start-and-wait
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+
+              APP_NAME="analyzer"
+              GAV="com.example:analyzer:1.0.0"
+              DEPS="camel-observability-services,mvn:org.apache.camel.quarkus:camel-quarkus-platform-http"
+
+              RUN=$(cat <<EOF | oc create -f - -o jsonpath='{.metadata.name}'
+              apiVersion: tekton.dev/v1
+              kind: PipelineRun
+              metadata:
+                generateName: build-${APP_NAME}-
+              spec:
+                pipelineRef:
+                  name: build
+                params:
+                  - name: repo-url
+                    value: "$(params.repo-url)"
+                  - name: repo-revision
+                    value: "$(params.repo-revision)"
+                  - name: app-path
+                    value: "${APP_NAME}"
+                  - name: app-name
+                    value: "${APP_NAME}"
+                  - name: namespace
+                    value: "$(params.namespace)"
+                  - name: camel-image
+                    value: "$(params.camel-image)"
+                  - name: gav
+                    value: "${GAV}"
+                  - name: runtime-version
+                    value: "$(params.runtime-version)"
+                  - name: deps
+                    value: "${DEPS}"
+                workspaces:
+                  - name: shared-workspace
+                    volumeClaimTemplate:
+                      spec:
+                        accessModes:
+                          - ReadWriteOnce
+                        resources:
+                          requests:
+                            storage: 1Gi
+              EOF
+              )
+
+              echo "Started ${RUN}"
+              while true; do
+                STATUS=$(oc get pipelinerun "${RUN}" -o jsonpath='{.status.conditions[0].status}' 2>/dev/null || echo "Unknown")
+                REASON=$(oc get pipelinerun "${RUN}" -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null || echo "")
+                if [ "${STATUS}" = "True" ]; then
+                  echo "${RUN}: Succeeded"
+                  exit 0
+                elif [ "${STATUS}" = "False" ]; then
+                  echo "${RUN}: Failed (${REASON})"
+                  exit 1
+                fi
+                sleep 10
+              done
+      params:
+        - name: repo-url
+          value: $(params.repo-url)
+        - name: repo-revision
+          value: $(params.repo-revision)
+        - name: namespace
+          value: $(params.namespace)
+        - name: camel-image
+          value: $(params.camel-image)
+        - name: runtime-version
+          value: $(params.runtime-version)
+
+    - name: build-ui-console
+      taskSpec:
+        params:
+          - name: repo-url
+            type: string
+          - name: repo-revision
+            type: string
+          - name: namespace
+            type: string
+          - name: camel-image
+            type: string
+          - name: runtime-version
+            type: string
+        steps:
+          - name: start-and-wait
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+
+              APP_NAME="ui-console"
+              GAV="com.example:ui-console:1.0.0"
+              DEPS="camel-observability-services,mvn:org.apache.camel.quarkus:camel-quarkus-platform-http"
+
+              RUN=$(cat <<EOF | oc create -f - -o jsonpath='{.metadata.name}'
+              apiVersion: tekton.dev/v1
+              kind: PipelineRun
+              metadata:
+                generateName: build-${APP_NAME}-
+              spec:
+                pipelineRef:
+                  name: build
+                params:
+                  - name: repo-url
+                    value: "$(params.repo-url)"
+                  - name: repo-revision
+                    value: "$(params.repo-revision)"
+                  - name: app-path
+                    value: "${APP_NAME}"
+                  - name: app-name
+                    value: "${APP_NAME}"
+                  - name: namespace
+                    value: "$(params.namespace)"
+                  - name: camel-image
+                    value: "$(params.camel-image)"
+                  - name: gav
+                    value: "${GAV}"
+                  - name: runtime-version
+                    value: "$(params.runtime-version)"
+                  - name: deps
+                    value: "${DEPS}"
+                workspaces:
+                  - name: shared-workspace
+                    volumeClaimTemplate:
+                      spec:
+                        accessModes:
+                          - ReadWriteOnce
+                        resources:
+                          requests:
+                            storage: 1Gi
+              EOF
+              )
+
+              echo "Started ${RUN}"
+              while true; do
+                STATUS=$(oc get pipelinerun "${RUN}" -o jsonpath='{.status.conditions[0].status}' 2>/dev/null || echo "Unknown")
+                REASON=$(oc get pipelinerun "${RUN}" -o jsonpath='{.status.conditions[0].reason}' 2>/dev/null || echo "")
+                if [ "${STATUS}" = "True" ]; then
+                  echo "${RUN}: Succeeded"
+                  exit 0
+                elif [ "${STATUS}" = "False" ]; then
+                  echo "${RUN}: Failed (${REASON})"
+                  exit 1
+                fi
+                sleep 10
+              done
+      params:
+        - name: repo-url
+          value: $(params.repo-url)
+        - name: repo-revision
+          value: $(params.repo-revision)
+        - name: namespace
+          value: $(params.namespace)
+        - name: camel-image
+          value: $(params.camel-image)
+        - name: runtime-version
+          value: $(params.runtime-version)

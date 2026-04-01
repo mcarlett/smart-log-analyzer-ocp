@@ -12,10 +12,6 @@ spec:
       type: string
       default: src/main/docker/Dockerfile.jvm
       description: Destination path for the Dockerfile relative to export-dir
-    - name: runtime
-      type: string
-      default: "quarkus"
-      description: "Target runtime: quarkus or spring-boot"
   workspaces:
     - name: source
       description: Workspace containing the exported project
@@ -26,8 +22,7 @@ spec:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        RUNTIME="$(params.runtime)"
-        CONFIG_MAP="base-image-config-${RUNTIME}"
+        CONFIG_MAP="base-image-config-quarkus"
         DEST="$(workspaces.source.path)/$(params.export-dir)/$(params.dockerfile-path)"
 
         mkdir -p "$(dirname "${DEST}")"

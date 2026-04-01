@@ -1,28 +1,51 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-NAMESPACE="${1:-slog-analyzer}"
+echo "=== Cleaning Smart Log Analyzer ==="
 
-echo "Deleting Infinispan and AMQ Broker CRs..."
-oc delete infinispan infinispan -n "${NAMESPACE}" --ignore-not-found
-oc delete activemqartemis artemis -n "${NAMESPACE}" --ignore-not-found
+NS=$(oc project -q)
+echo "Namespace: ${NS}"
 
-echo "Uninstalling Vault Helm release..."
-helm uninstall vault -n "${NAMESPACE}" || true
+echo ""
+echo "--- Uninstalling Helm releases ---"
+helm uninstall smart-log-analyzer 2>/dev/null || true
+helm uninstall camel-otel-collector --ignore-not-found 2>/dev/null || true
 
-echo "Deleting task runs and tasks..."
-oc delete taskrun --all -n "${NAMESPACE}"
-oc delete task --all -n "${NAMESPACE}"
+echo ""
+echo "--- Deleting infrastructure ---"
+oc delete -f resources/otel-infra/kafka/kafka-sandbox.yaml --ignore-not-found 2>/dev/null || true
+oc delete -f resources/infinispan/infinispan-sandbox.yaml --ignore-not-found 2>/dev/null || true
+oc delete -f resources/amq-broker/artemis-sandbox.yaml --ignore-not-found 2>/dev/null || true
 
-echo "Deleting pipeline runs and pipelines..."
-oc delete pipelinerun --all -n "${NAMESPACE}"
-oc delete pipeline --all -n "${NAMESPACE}"
+echo ""
+echo "--- Deleting pipeline resources ---"
+oc delete pipelinerun --all 2>/dev/null || true
+oc delete taskrun --all 2>/dev/null || true
+oc delete pipeline --all 2>/dev/null || true
+oc delete task --all 2>/dev/null || true
 
-echo "Deleting namespace ${NAMESPACE}..."
-oc delete project "${NAMESPACE}"
+echo ""
+echo "--- Deleting built image streams ---"
+oc delete is correlator analyzer ui-console --ignore-not-found 2>/dev/null || true
 
-echo "Removing cluster-scoped RBAC resources..."
-oc delete clusterrolebinding "${NAMESPACE}-pipeline" --ignore-not-found
-oc delete clusterrole "${NAMESPACE}-pipeline" --ignore-not-found
+echo ""
+echo "--- Deleting ConfigMaps and Secrets ---"
+oc delete configmap infra-endpoints otel-infra-endpoints base-image-config-quarkus service-ca-bundle --ignore-not-found 2>/dev/null || true
+oc delete secret infra-accounts openai service-ca-truststore --ignore-not-found 2>/dev/null || true
 
-echo "Cleanup complete."
+echo ""
+echo "--- Deleting log-generator ---"
+oc delete deployment log-generator --ignore-not-found 2>/dev/null || true
+oc delete svc log-generator --ignore-not-found 2>/dev/null || true
+
+echo ""
+echo "--- Cleaning up empty ReplicaSets ---"
+oc get rs --no-headers 2>/dev/null | awk '$2==0 && $3==0 && $4==0 {print $1}' | xargs -r oc delete rs 2>/dev/null || true
+
+echo ""
+echo "--- Waiting for pods to terminate ---"
+oc wait pod --all --for=delete --timeout=120s 2>/dev/null || true
+
+echo ""
+echo "=== Cleanup complete ==="
+oc get pods 2>/dev/null || true

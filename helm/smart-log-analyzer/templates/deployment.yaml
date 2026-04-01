@@ -26,48 +26,31 @@ spec:
         app: {{ $name }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
-        vault.hashicorp.com/agent-inject: "true"
-        vault.hashicorp.com/role: {{ $.Values.vault.role | quote }}
-        vault.hashicorp.com/agent-inject-secret-env: "secret/data/amq-username"
-        vault.hashicorp.com/agent-inject-template-env: |
-          {{`{{- with secret "secret/data/amq-username" }}`}}
-          export AMQ_USERNAME="{{ `{{ .Data.data.value }}` }}"
-          {{`{{- end }}`}}
-          {{`{{- with secret "secret/data/amq-password" }}`}}
-          export AMQ_PASSWORD="{{ `{{ .Data.data.value }}` }}"
-          {{`{{- end }}`}}
-          {{`{{- with secret "secret/data/datagrid-username" }}`}}
-          export DATAGRID_USERNAME="{{ `{{ .Data.data.value }}` }}"
-          {{`{{- end }}`}}
-          {{`{{- with secret "secret/data/datagrid-password" }}`}}
-          export DATAGRID_PASSWORD="{{ `{{ .Data.data.value }}` }}"
-          {{`{{- end }}`}}
-        {{- if $component.vaultSecrets }}
-        {{- range $idx, $vs := $component.vaultSecrets }}
-        vault.hashicorp.com/agent-inject-secret-{{ $vs.name }}: {{ $vs.path | quote }}
-        vault.hashicorp.com/agent-inject-template-{{ $vs.name }}: |
-          {{- range $vs.env }}
-          {{ printf `{{- with secret "%s" }}` $vs.path }}
-          export {{ .envVar }}="{{ printf `{{ index .Data.data "%s" }}` .field }}"
-          {{ `{{- end }}` }}
-          {{- end }}
-        {{- end }}
-        {{- end }}
     spec:
-      serviceAccountName: {{ $.Values.vault.serviceAccount }}
+      {{- if and $component.serviceCa $component.serviceCa.enabled }}
+      initContainers:
+        - name: build-truststore
+          image: {{ $.Values.imageRegistry }}/{{ $.Values.namespace }}/{{ $name }}:latest
+          command: ['sh', '-c']
+          args:
+            - |
+              cat "$JAVA_HOME/lib/security/cacerts" > /tmp/truststore/truststore.jks
+              chmod 664 /tmp/truststore/truststore.jks
+              if [ -f /service-ca/service-ca.crt ]; then
+                keytool -import -trustcacerts -alias openshift-service-ca \
+                  -file /service-ca/service-ca.crt \
+                  -keystore /tmp/truststore/truststore.jks \
+                  -storepass changeit -noprompt
+              fi
+          volumeMounts:
+            - name: truststore
+              mountPath: /tmp/truststore
+            - name: service-ca
+              mountPath: /service-ca
+      {{- end }}
       containers:
         - name: {{ $name }}
           image: {{ $.Values.imageRegistry }}/{{ $.Values.namespace }}/{{ $name }}:latest
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              . /vault/secrets/env
-              {{- if $component.vaultSecrets }}
-              {{- range $component.vaultSecrets }}
-              . /vault/secrets/{{ .name }}
-              {{- end }}
-              {{- end }}
-              exec /opt/jboss/container/java/run/run-java.sh
           resources:
             limits:
               memory: {{ $component.memoryLimit }}
@@ -76,10 +59,18 @@ spec:
                 name: infra-endpoints
             - configMapRef:
                 name: otel-infra-endpoints
+            - secretRef:
+                name: infra-accounts
+            {{- if $component.secrets }}
+            {{- range $component.secrets }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+            {{- end }}
           env:
-            {{- if and (eq $.Values.runtime "quarkus") $.Values.quarkus.nettyWorkaround }}
+            {{- if or $.Values.nettyWorkaround (and $component.serviceCa $component.serviceCa.enabled) }}
             - name: JAVA_OPTS_APPEND
-              value: {{ $.Values.quarkus.javaOptsAppend | quote }}
+              value: "{{ if $.Values.nettyWorkaround }}{{ $.Values.javaOptsAppend }}{{ end }}{{ if and $component.serviceCa $component.serviceCa.enabled }} -Djavax.net.ssl.trustStore=/tmp/truststore/truststore.jks -Djavax.net.ssl.trustStorePassword=changeit{{ end }}"
             {{- end }}
             {{- if $component.extraEnv }}
             {{- toYaml $component.extraEnv | nindent 12 }}
@@ -87,28 +78,33 @@ spec:
           volumeMounts:
             - name: app-config
               mountPath: /deployments/config
-            - name: kafka-ca
-              mountPath: /etc/kafka-ca
-              readOnly: true
             {{- if $component.storage }}
             {{- if $component.storage.mountPath }}
             - name: app-storage
               mountPath: {{ $component.storage.mountPath }}
             {{- end }}
             {{- end }}
+            {{- if and $component.serviceCa $component.serviceCa.enabled }}
+            - name: truststore
+              mountPath: /tmp/truststore
+            {{- end }}
       volumes:
         - name: app-config
           configMap:
             name: {{ $name }}-config
-        - name: kafka-ca
-          secret:
-            secretName: kafka-cluster-ca
         {{- if $component.storage }}
         {{- if $component.storage.mountPath }}
         - name: app-storage
           persistentVolumeClaim:
             claimName: {{ $name }}-storage
         {{- end }}
+        {{- end }}
+        {{- if and $component.serviceCa $component.serviceCa.enabled }}
+        - name: truststore
+          emptyDir: {}
+        - name: service-ca
+          configMap:
+            name: {{ $component.serviceCa.configMap }}
         {{- end }}
 {{- end }}
 {{- end }}

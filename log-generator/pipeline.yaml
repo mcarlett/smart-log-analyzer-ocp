@@ -4,25 +4,32 @@ metadata:
   name: deploy-log-generator
 spec:
   params:
-    - name: namespace
-      type: string
-      default: "log-generator"
     - name: repo-url
       type: string
-      default: "https://github.com/mcarlett/camel-jbang-examples.git"
-    - name: repo-branch
+      default: "https://github.com/apache/camel-jbang-examples.git"
+    - name: repo-revision
       type: string
-      default: "tekton"
-    - name: app-path
+      default: main
+    - name: namespace
       type: string
-      default: "smart-log-analyzer/log-generator"
-    - name: image
+      default: slog-analyzer
+    - name: otel-collector-endpoint
       type: string
-      default: "quay.io/mcarlett/camel-launcher:4.18.0"
+      default: "http://camel-otel-collector-opentelemetry-collector.slog-analyzer.svc:4317"
   workspaces:
     - name: shared-workspace
+
   tasks:
-    - name: clone
+    - name: init-workspace
+      taskRef:
+        name: init-workspace
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    - name: git-clone
+      runAfter:
+        - init-workspace
       taskRef:
         resolver: cluster
         params:
@@ -36,16 +43,16 @@ spec:
         - name: URL
           value: $(params.repo-url)
         - name: REVISION
-          value: $(params.repo-branch)
+          value: $(params.repo-revision)
         - name: DELETE_EXISTING
           value: "true"
       workspaces:
         - name: output
           workspace: shared-workspace
 
-    - name: fix-permissions
+    - name: copy-dockerfile
       runAfter:
-        - clone
+        - git-clone
       workspaces:
         - name: source
           workspace: shared-workspace
@@ -53,18 +60,69 @@ spec:
         workspaces:
           - name: source
         steps:
-          - name: fix-permissions
+          - name: copy
             image: registry.access.redhat.com/ubi9/ubi-minimal:latest
             securityContext:
               runAsUser: 0
             script: |
               #!/usr/bin/env bash
-              chmod -R 777 $(workspaces.source.path)
-              rm -rf $(workspaces.source.path)/lost+found
+              set -euo pipefail
+              CONTEXT="$(workspaces.source.path)/smart-log-analyzer/log-generator"
+              cat > "${CONTEXT}/Dockerfile" << 'DOCKERFILE'
+              FROM quay.io/mcarlett/camel-launcher:4.18.0
+
+              USER root
+
+              RUN curl -fsSL -o /opt/opentelemetry-javaagent.jar https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/latest/download/opentelemetry-javaagent.jar
+
+              COPY log-generator.camel.yaml /routes/
+              COPY application-dev.properties /routes/
+              COPY agent.properties /opt/agent.properties
+
+              RUN chmod -R a+r /opt/opentelemetry-javaagent.jar /opt/agent.properties /routes/
+
+              USER ubuntu
+              WORKDIR /tmp
+
+              ENV HOME=/tmp
+              ENV JAVA_OPTS="-javaagent:/opt/opentelemetry-javaagent.jar"
+              ENV OTEL_JAVAAGENT_CONFIGURATION_FILE=/opt/agent.properties
+
+              CMD ["run", "/routes/log-generator.camel.yaml", "/routes/application-dev.properties", "--dep=org.apache.camel:camel-opentelemetry2"]
+              DOCKERFILE
+
+              echo "Dockerfile written to ${CONTEXT}"
+              ls -la "${CONTEXT}"
+
+    - name: build-image
+      runAfter:
+        - copy-dockerfile
+      taskRef:
+        resolver: cluster
+        params:
+          - name: kind
+            value: task
+          - name: name
+            value: buildah
+          - name: namespace
+            value: openshift-pipelines
+      params:
+        - name: IMAGE
+          value: image-registry.openshift-image-registry.svc:5000/$(params.namespace)/log-generator:latest
+        - name: DOCKERFILE
+          value: Dockerfile
+        - name: CONTEXT
+          value: .
+        - name: TLS_VERIFY
+          value: "false"
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+          subPath: smart-log-analyzer/log-generator
 
     - name: deploy
       runAfter:
-        - fix-permissions
+        - build-image
       taskRef:
         resolver: cluster
         params:
@@ -82,40 +140,18 @@ spec:
           value: |
             NS="$(params.namespace)"
             APP="log-generator"
-            IMAGE="$(params.image)"
-            APP_PATH="$(params.app-path)"
+            IMAGE="image-registry.openshift-image-registry.svc:5000/${NS}/${APP}:latest"
+            OTEL_ENDPOINT="$(params.otel-collector-endpoint)"
 
-            cd $(workspaces.manifest_dir.path)/"${APP_PATH}"
-
-            # Create a ConfigMap with the Camel route and properties
-            oc create configmap ${APP}-routes \
-              --from-file=log-generator.camel.yaml \
-              --from-file=application-dev.properties \
-              -n "${NS}" --dry-run=client -o yaml | oc apply -f -
-
-            # Create the deployment
+            # Create deployment
             oc create deployment ${APP} \
               --image="${IMAGE}" \
               --replicas=0 \
               -n "${NS}" --dry-run=client -o yaml | oc apply -f -
 
-            # Mount the routes ConfigMap
-            oc set volume deployment/${APP} \
-              -n "${NS}" \
-              --add --overwrite \
-              --name=routes \
-              --type=configmap \
-              --configmap-name=${APP}-routes \
-              --mount-path=/routes
-
-            # Annotate for OTel auto-instrumentation
-            oc patch deployment/${APP} -n "${NS}" --type=merge \
-              -p='{"spec":{"template":{"metadata":{"annotations":{"instrumentation.opentelemetry.io/inject-java":"true"}}}}}'
-
-            # Set the container command and writable home directory
-            oc patch deployment/${APP} -n "${NS}" --type=json \
-              -p='[{"op":"add","path":"/spec/template/spec/containers/0/command","value":["camel","run","/routes/log-generator.camel.yaml","/routes/application-dev.properties","--dep=org.apache.camel:camel-opentelemetry2"]},{"op":"add","path":"/spec/template/spec/containers/0/workingDir","value":"/tmp"}]'
-            oc set env deployment/${APP} -n "${NS}" HOME=/tmp
+            # Set OTel endpoint
+            oc set env deployment/${APP} -n "${NS}" \
+              OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_ENDPOINT}"
 
             # Scale up
             oc scale deployment/${APP} -n "${NS}" --replicas=1

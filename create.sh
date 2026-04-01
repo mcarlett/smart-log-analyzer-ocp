@@ -1,58 +1,147 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-usage() {
-  cat <<EOF
-Usage: $(basename "$0") [NAMESPACE] [RUNTIME] [KAFKA_NAMESPACE]
+echo "=== Installing Smart Log Analyzer ==="
 
-Deploy the Smart Log Analyzer infrastructure and applications on OpenShift.
+NS=$(oc project -q)
+echo "Namespace: ${NS}"
 
-Arguments:
-  NAMESPACE        Target namespace (default: slog-analyzer)
-  RUNTIME          Camel runtime: quarkus or spring-boot (default: quarkus)
-  KAFKA_NAMESPACE  Namespace containing the Strimzi Kafka cluster CA secret (default: camel-otel-infra)
-
-Examples:
-  $(basename "$0")                                      # defaults: slog-analyzer, quarkus, camel-otel-infra
-  $(basename "$0") my-ns spring-boot                    # Spring Boot runtime in my-ns namespace
-  $(basename "$0") my-ns quarkus my-kafka-ns            # custom Kafka namespace
-EOF
-  exit 0
-}
-
-[[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && usage
-
-NAMESPACE="${1:-slog-analyzer}"
-RUNTIME="${2:-quarkus}"
-KAFKA_NAMESPACE="${3:-camel-otel-infra}"
-
-echo "Creating project ${NAMESPACE}..."
-oc new-project "${NAMESPACE}" || oc project "${NAMESPACE}"
-
-echo "Applying RBAC, secrets, configmaps, PVCs, tasks, and pipelines..."
-oc apply -f resources/rbac/
+# Step 1: Apply secrets and ConfigMaps
+echo ""
+echo "--- Applying secrets and ConfigMaps ---"
 oc apply -f resources/secrets/
 oc apply -f resources/configmaps/
-oc apply -f resources/pvc/
+
+# Step 2: Deploy Kafka
+echo ""
+echo "--- Deploying Kafka ---"
+oc apply -f resources/otel-infra/kafka/kafka-sandbox.yaml
+oc wait deployment/kafka --for=condition=Available --timeout=180s
+echo "Kafka ready"
+
+# Step 3: Deploy OTel Collector
+echo ""
+echo "--- Deploying OTel Collector ---"
+helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts 2>/dev/null || true
+helm repo update
+helm install camel-otel-collector open-telemetry/opentelemetry-collector \
+  -f resources/otel-infra/otel-collector/values-sandbox.yaml \
+  -n "${NS}" --wait --timeout 300s
+echo "OTel Collector ready"
+
+# Step 4: Deploy Infinispan
+echo ""
+echo "--- Deploying Infinispan ---"
+oc apply -f resources/infinispan/infinispan-sandbox.yaml
+oc wait deployment/infinispan --for=condition=Available --timeout=180s
+echo "Infinispan ready"
+
+# Step 5: Create Infinispan caches
+echo ""
+echo "--- Creating Infinispan caches ---"
+ISPN_POD=$(oc get pod -l app=infinispan -o jsonpath='{.items[0].metadata.name}')
+
+# Wait for Infinispan REST API to be ready
+for i in $(seq 1 30); do
+  if oc exec "${ISPN_POD}" -- curl -sf -u admin:password --digest http://localhost:11222/rest/v2/caches >/dev/null 2>&1; then
+    break
+  fi
+  echo "Waiting for Infinispan REST API..."
+  sleep 2
+done
+
+for CACHE_FILE in resources/infinispan/caches/*.json; do
+  CACHE_NAME=$(basename "${CACHE_FILE}" .json)
+  echo "Creating cache '${CACHE_NAME}'..."
+  oc exec "${ISPN_POD}" -- curl -sf \
+    -u admin:password --digest \
+    -X POST "http://localhost:11222/rest/v2/caches/${CACHE_NAME}" \
+    -H 'Content-Type: application/json' \
+    -d "$(cat "${CACHE_FILE}")"
+done
+echo "Caches created"
+
+# Step 6: Deploy AMQ Broker
+echo ""
+echo "--- Deploying AMQ Broker ---"
+oc apply -f resources/amq-broker/artemis-sandbox.yaml
+oc wait deployment/artemis --for=condition=Available --timeout=180s
+echo "AMQ Broker ready"
+
+# Step 7: Create infra-endpoints ConfigMap
+echo ""
+echo "--- Creating infra-endpoints ConfigMap ---"
+oc create configmap infra-endpoints \
+  --from-literal=ARTEMIS_BROKER_URL="tcp://artemis.${NS}.svc:61616" \
+  --from-literal=INFINISPAN_HOSTS="infinispan.${NS}.svc:11222" \
+  --dry-run=client -o yaml | oc apply -f -
+
+# Step 8: Configure OpenAI credentials
+echo ""
+echo "--- Configuring OpenAI credentials ---"
+MODEL_NAME=$(oc get inferenceservice -n sandbox-shared-models -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | grep granite | head -1)
+if [ -z "${MODEL_NAME}" ]; then
+  echo "ERROR: No Granite model found in sandbox-shared-models namespace"
+  exit 1
+fi
+echo "Using model: ${MODEL_NAME}"
+SA_TOKEN=$(oc create token default --duration=120h)
+oc create secret generic openai \
+  --from-literal=OPENAI_API_KEY="${SA_TOKEN}" \
+  --from-literal=OPENAI_BASE_URL="https://${MODEL_NAME}-predictor.sandbox-shared-models.svc.cluster.local:8443/v1" \
+  --from-literal=OPENAI_MODEL="${MODEL_NAME}" \
+  --dry-run=client -o yaml | oc apply -f -
+echo "OpenAI credentials configured"
+
+# Step 9: Create service CA bundle
+echo ""
+echo "--- Creating service CA bundle ---"
+oc create configmap service-ca-bundle --dry-run=client -o yaml | oc apply -f -
+oc annotate configmap service-ca-bundle service.beta.openshift.io/inject-cabundle=true --overwrite
+echo "Service CA bundle configured"
+
+# Step 10: Deploy applications with Helm
+echo ""
+echo "--- Deploying applications with Helm ---"
+helm install smart-log-analyzer helm/smart-log-analyzer/ \
+  --set namespace="${NS}" \
+  -n "${NS}"
+
+# Step 11: Apply Tekton tasks and pipeline
+echo ""
+echo "--- Applying Tekton tasks and pipeline ---"
 oc apply -f tasks/
 oc apply -f pipeline/
 
-echo "Starting infra-deploy pipeline..."
-oc create -f pipelinerun/infra-deploy-run.yaml
+# Step 12: Build application images
+echo ""
+echo "--- Building application images ---"
+tkn pipeline start build-apps \
+  -p namespace="${NS}" \
+  --use-param-defaults \
+  --showlog
 
-echo "Waiting for infra-deploy to complete..."
-tkn pipelinerun logs -f -L
+# Step 13: Wait for all deployments to be ready
+echo ""
+echo "--- Waiting for application deployments ---"
+for APP in correlator analyzer ui-console; do
+  echo "Waiting for ${APP}..."
+  oc wait deployment/"${APP}" --for=condition=Available --timeout=300s
+done
+echo "All applications ready"
 
-echo "Creating kafka-cluster-ca secret..."
-oc get secret camel-cluster-cluster-ca-cert -n "${KAFKA_NAMESPACE}" -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/ca.crt
-oc create secret generic kafka-cluster-ca --from-file=ca.crt=/tmp/ca.crt -n "${NAMESPACE}"
-
-echo "Setting up GitOps polling (CronJob)..."
-oc apply -f triggers/cronjob-poll.yaml -n "${NAMESPACE}"
+# Step 14: Clean up build resources
+echo ""
+echo "--- Cleaning up build resources ---"
+oc delete pipelinerun --all 2>/dev/null || true
+oc delete taskrun --all 2>/dev/null || true
+oc get rs --no-headers | awk '$2==0 && $3==0 && $4==0 {print $1}' | xargs -r oc delete rs 2>/dev/null || true
 
 echo ""
-echo "Infrastructure deployed. Application builds will be triggered automatically"
-echo "by the CronJob polling the source repository every 5 minutes."
+echo "=== Installation complete ==="
+oc get pods -l 'app in (kafka,infinispan,artemis,correlator,analyzer,ui-console)'
 echo ""
-echo "To trigger a manual build:"
-echo "  tkn pipeline start build -p app-name=correlator -p app-path=smart-log-analyzer/correlator -p gav=com.example:correlator:1.0.0 -p runtime=${RUNTIME} -w name=shared-workspace,volumeClaimTemplateFile=pipelinerun/build-run.yaml"
+ROUTE=$(oc get route ui-console -o jsonpath='https://{.spec.host}' 2>/dev/null)
+if [ -n "${ROUTE}" ]; then
+  echo "UI Console: ${ROUTE}"
+fi

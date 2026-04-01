@@ -15,14 +15,10 @@ spec:
       type: string
       default: "com.example:camel-app:1.0.0"
       description: Maven groupId:artifactId:version for the exported project
-    - name: runtime
-      type: string
-      default: "quarkus"
-      description: "Target runtime for the export: quarkus or spring-boot"
     - name: runtime-version
       type: string
       default: ""
-      description: "Runtime platform version (Quarkus or Spring Boot version). If empty, uses the default from camel export"
+      description: "Quarkus version. If empty, uses the default from camel export"
     - name: deps
       type: string
       default: ""
@@ -44,19 +40,14 @@ spec:
 
         EXPORT_DIR="$(workspaces.source.path)/$(params.export-dir)"
 
-        RUNTIME="$(params.runtime)"
-        echo "Exporting Camel application from $(params.app-path) to ${RUNTIME}..."
+        echo "Exporting Camel application from $(params.app-path) to quarkus..."
         echo "Output directory: ${EXPORT_DIR}"
         echo "GAV: $(params.gav)"
 
         EXTRA_ARGS=""
         VERSION="$(params.runtime-version)"
         if [ -n "${VERSION}" ]; then
-          if [ "${RUNTIME}" = "quarkus" ]; then
-            EXTRA_ARGS="--quarkus-version=${VERSION}"
-          elif [ "${RUNTIME}" = "spring-boot" ]; then
-            EXTRA_ARGS="--camel-spring-boot-version=${VERSION}"
-          fi
+          EXTRA_ARGS="--quarkus-version=${VERSION}"
         fi
 
         DEP_ARGS=""
@@ -65,9 +56,18 @@ spec:
           DEP_ARGS="--dep=${DEPS}"
         fi
 
-        CMD="camel export --runtime=${RUNTIME} ${EXTRA_ARGS} ${DEP_ARGS} --gav=$(params.gav) --fresh --dir=${EXPORT_DIR}"
+        CMD="camel export --runtime=quarkus ${EXTRA_ARGS} ${DEP_ARGS} --gav=$(params.gav) --fresh --dir=${EXPORT_DIR}"
         echo "Running: ${CMD}"
         eval "${CMD}"
 
         echo "Export completed. Contents of ${EXPORT_DIR}:"
         ls -la "${EXPORT_DIR}"
+        echo "Generated pom.xml:"
+        cat "${EXPORT_DIR}/pom.xml"
+    - name: fix-permissions
+      image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+      securityContext:
+        runAsUser: 0
+      script: |
+        #!/usr/bin/env bash
+        chown -R 65532:0 $(workspaces.source.path)/$(params.export-dir)

@@ -1,5 +1,0 @@
-runtime: quarkus
-
-quarkus:
-  nettyWorkaround: true
-  javaOptsAppend: "-Dio.netty.transport.noNative=true"

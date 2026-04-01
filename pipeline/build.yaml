@@ -32,22 +32,14 @@ spec:
       type: string
       description: Maven groupId:artifactId:version for the exported project
       default: "com.example:correlator:1.0.0"
-    - name: runtime
-      type: string
-      description: "Target runtime for the camel export: quarkus or spring-boot"
-      default: "quarkus"
     - name: runtime-version
       type: string
-      description: "Runtime platform version (Quarkus or Spring Boot version). If empty, uses the default from camel export"
-      default: ""
-    - name: extensions
-      type: string
-      description: Comma-separated list of Quarkus extensions to add (only used with quarkus runtime)
-      default: ""
+      description: "Quarkus version. If empty, uses the default from camel export"
+      default: "3.32.3"
     - name: deps
       type: string
       description: "Comma-separated list of additional dependencies to add during camel export (e.g. camel-observability-services)"
-      default: "camel-observability-services"
+      default: "camel-observability-services,mvn:org.apache.camel.quarkus:camel-quarkus-platform-http"
 
   workspaces:
     - name: shared-workspace
@@ -98,7 +90,7 @@ spec:
         - name: source
           workspace: shared-workspace
 
-    # Step 3: Export Camel application to target runtime (quarkus or spring-boot)
+    # Step 3: Export Camel application to Quarkus
     - name: camel-export
       runAfter:
         - fix-workspace
@@ -111,8 +103,6 @@ spec:
           value: $(params.camel-image)
         - name: gav
           value: $(params.gav)
-        - name: runtime
-          value: $(params.runtime)
         - name: runtime-version
           value: $(params.runtime-version)
         - name: deps
@@ -123,49 +113,10 @@ spec:
         - name: source
           workspace: shared-workspace
 
-    # Step 4: Add Quarkus extensions (only for quarkus runtime)
-    - name: add-quarkus-extension
-      when:
-        - input: "$(params.runtime)"
-          operator: in
-          values: ["quarkus"]
-      runAfter:
-        - camel-export
-      taskRef:
-        name: add-quarkus-extension
-      params:
-        - name: extensions
-          value: "$(params.extensions)"
-        - name: export-dir
-          value: export
-      workspaces:
-        - name: source
-          workspace: shared-workspace
-
-    # Step 4b: Fix workspace permissions after export/extensions
-    - name: fix-export-permissions
-      runAfter:
-        - add-quarkus-extension
-        - camel-export
-      workspaces:
-        - name: source
-          workspace: shared-workspace
-      taskSpec:
-        workspaces:
-          - name: source
-        steps:
-          - name: fix-permissions
-            image: registry.access.redhat.com/ubi9/ubi-minimal:latest
-            securityContext:
-              runAsUser: 0
-            script: |
-              #!/usr/bin/env bash
-              chown -R 65532:0 $(workspaces.source.path)/export
-
-    # Step 5: Build application with Maven
+    # Step 4: Build application with Maven
     - name: maven-build
       runAfter:
-        - fix-export-permissions
+        - camel-export
       workspaces:
         - name: source
           workspace: shared-workspace
@@ -192,13 +143,11 @@ spec:
       params:
         - name: export-dir
           value: export
-        - name: runtime
-          value: $(params.runtime)
       workspaces:
         - name: source
           workspace: shared-workspace
 
-    # Step 7: Build container image with Buildah
+    # Step 6: Build container image with Buildah
     - name: build-image
       runAfter:
         - prepare-dockerfile

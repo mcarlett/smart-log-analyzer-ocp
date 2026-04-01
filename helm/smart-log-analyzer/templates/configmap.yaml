@@ -1,6 +1,6 @@
 {{- range $name, $component := .Values.components }}
 {{- if $component.enabled }}
-{{- $propsFile := printf "properties/%s/application-prod-%s.properties" $name $.Values.runtime }}
+{{- $propsFile := printf "properties/%s/application-prod-quarkus.properties" $name }}
 {{- $props := $.Files.Get $propsFile }}
 {{- if $props }}
 ---
