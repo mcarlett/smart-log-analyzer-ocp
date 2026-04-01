@@ -151,7 +151,8 @@ spec:
 
             # Set OTel endpoint
             oc set env deployment/${APP} -n "${NS}" \
-              OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_ENDPOINT}"
+              OTEL_EXPORTER_OTLP_ENDPOINT="${OTEL_ENDPOINT}" \
+              OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 
             # Scale up
             oc scale deployment/${APP} -n "${NS}" --replicas=1
